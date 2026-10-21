@@ -80,8 +80,7 @@ export async function runWriteCommand(
       "Operasi tulis dinonaktifkan. Set MIKROTIK_WRITE_ENABLED=true lalu restart MCP server.",
     );
   }
-  validateWriteCommand(command);
-  validateOptions({ attributes });
+  validateWriteOperation(command, attributes);
   return withClient(
     async (client) => {
       const rows = await client.command(command, { attributes, limit: 20 });
@@ -89,6 +88,14 @@ export async function runWriteCommand(
     },
     config,
   );
+}
+
+export function validateWriteOperation(
+  command: string,
+  attributes: Record<string, string | number | boolean>,
+): void {
+  validateWriteCommand(command);
+  validateOptions({ attributes });
 }
 
 function validateReadCommand(command: string, config: RouterOsConfig): void {

@@ -86,6 +86,116 @@ Codex akan memakai tiga tool:
 | `mikrotik_query` | Menjalankan `/print` atau `/getall` | Aktif |
 | `mikrotik_execute` | `add`, `set`, `remove`, `enable`, `disable`, `move`, `reset-counters` | Nonaktif |
 
+## Agent Telegram
+
+Agent Telegram menjalankan Codex CLI lokal yang sudah login dengan akun ChatGPT. Tidak diperlukan `OPENAI_API_KEY`. Codex memakai MCP `mikrotik` yang sudah terdaftar pada mesin ini untuk membaca router dan memahami permintaan pengguna. Mode long polling dipakai sehingga server tidak memerlukan domain publik, HTTPS, atau webhook.
+
+Alur keamanannya:
+
+- hanya Telegram user ID dalam allowlist yang dilayani
+- direct message diwajibkan secara default
+- credential ChatGPT diambil dari login Codex CLI lokal, tidak disalin ke `.env`
+- environment Codex memakai allowlist minimal sehingga token Telegram dan credential RouterOS tidak diwariskan
+- sesi berjalan di direktori sementara dengan permission profile filesystem minimal
+- konfigurasi pengguna diabaikan untuk sesi bot; Codex hanya diberi MCP `mikrotik` dengan tool `mikrotik_inspect` dan `mikrotik_query`
+- pembacaan router berjalan langsung saat diperlukan
+- perubahan konfigurasi dibuat sebagai preview command dan attribute
+- perubahan baru dijalankan setelah pemilik menekan tombol `Jalankan`
+- konfirmasi terikat ke user dan chat, hanya dapat dipakai sekali, dan kedaluwarsa otomatis
+- operasi beruntun dihentikan pada error pertama dan jumlah operasi yang sudah selesai dilaporkan
+
+### 1. Buat bot dan periksa login Codex
+
+1. Chat `@BotFather` di Telegram, jalankan `/newbot`, lalu simpan token bot.
+2. Pastikan Codex CLI sudah login dengan akun ChatGPT dan MCP MikroTik tersedia:
+
+```bash
+codex login status
+codex mcp get mikrotik
+```
+
+3. Salin konfigurasi contoh jika `.env` belum ada:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+```
+
+Isi bagian berikut di `.env`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=TOKEN_DARI_BOTFATHER
+TELEGRAM_ALLOWED_USER_IDS=0
+TELEGRAM_PRIVATE_ONLY=true
+CODEX_TIMEOUT_SECONDS=300
+```
+
+Jalankan bot sementara, kirim `/whoami` melalui Telegram, lalu ganti nilai `TELEGRAM_ALLOWED_USER_IDS=0` dengan ID yang diberikan bot. Beberapa ID dapat dipisahkan dengan koma. Restart bot sesudah mengubah allowlist.
+
+Secara default agent memakai model bawaan Codex. Jika perlu, model dapat dipilih dengan `CODEX_MODEL`, tetapi model tersebut harus tersedia pada akun ChatGPT yang sedang login.
+
+### 2. Jalankan agent
+
+```bash
+npm ci
+npm run build
+node --env-file=.env dist/telegram.js
+```
+
+Untuk pengembangan tanpa build:
+
+```bash
+node --env-file=.env --import tsx src/telegram.ts
+```
+
+Untuk menjalankan terus-menerus melalui PM2:
+
+```bash
+npm run build
+npm run pm2:start
+pm2 save
+```
+
+Operasional berikutnya:
+
+```bash
+npm run pm2:restart
+npm run pm2:logs
+pm2 status mikrotik-telegram
+```
+
+Entry PM2 memakai nama `mikrotik-telegram`, menjalankan satu instance, melakukan auto-restart dengan jeda lima detik, dan membaca konfigurasi dari `.env`.
+
+Contoh chat:
+
+```text
+Cek versi RouterOS, uptime, CPU, dan memory.
+Interface mana yang tidak running?
+Tampilkan DHCP lease aktif dan ringkas per subnet.
+Periksa firewall filter yang disabled.
+Tambahkan address 10.20.0.1/24 ke ether4 dengan comment LAN-CCTV.
+```
+
+Empat contoh pertama hanya membaca data. Contoh terakhir menghasilkan preview dan tombol konfirmasi.
+
+### 3. Izinkan konfigurasi
+
+Secara default agent hanya dapat membaca router. Untuk mengizinkan `add`, `set`, `remove`, `enable`, `disable`, `move`, dan `reset-counters`, ubah `.env`:
+
+```dotenv
+MIKROTIK_WRITE_ENABLED=true
+```
+
+Restart agent setelah perubahan. Aksi seperti reboot, shutdown, reset configuration, dan install package tetap tidak diizinkan. Untuk mengurangi dampak jika token bocor, gunakan akun RouterOS khusus, batasi alamat sumber API, gunakan API SSL atau VPN, dan jangan memberikan policy yang tidak dibutuhkan.
+
+Perintah bot:
+
+| Perintah | Fungsi |
+| --- | --- |
+| `/start` atau `/help` | Contoh penggunaan dan bantuan |
+| `/whoami` | Telegram user ID dan chat ID |
+| `/new` | Menghapus konteks percakapan aktif |
+
 ## Mengaktifkan perubahan konfigurasi
 
 Ubah `.env` lalu mulai ulang sesi Codex:

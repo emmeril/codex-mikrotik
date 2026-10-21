@@ -19,7 +19,8 @@
   ],
   "type": "module",
   "bin": {
-    "codex-mikrotik-mcp": "dist/server.js"
+    "codex-mikrotik-mcp": "dist/server.js",
+    "codex-mikrotik-telegram": "dist/telegram.js"
   },
   "files": [
     "dist",
@@ -29,7 +30,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/server.ts",
+    "dev:telegram": "tsx src/telegram.ts",
     "start": "node dist/server.js",
+    "start:telegram": "node dist/telegram.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs --only mikrotik-telegram --env production",
+    "pm2:restart": "pm2 restart mikrotik-telegram --update-env",
+    "pm2:logs": "pm2 logs mikrotik-telegram",
     "test": "node --import tsx --test test/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
