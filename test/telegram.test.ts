@@ -109,6 +109,26 @@ test("authorized messages receive agent output", async () => {
   assert.equal(api.sent.at(-1)?.text, "Router sehat.");
 });
 
+test("typing indicator is refreshed while Codex is working", async () => {
+  const api = new FakeTelegramApi();
+  const agent = new SlowFakeAgent();
+  const bot = new TelegramBot({
+    api,
+    agent,
+    allowedUserIds: new Set(["42"]),
+    privateOnly: true,
+    pollTimeoutSeconds: 1,
+    typingRefreshMs: 10,
+  });
+
+  await bot.handleUpdate({
+    update_id: 1,
+    message: message(10, 42, "private", "cek router"),
+  });
+
+  assert.ok(api.chatActions >= 2);
+});
+
 test("agent keeps the Codex thread per Telegram chat", async () => {
   const runner = new FakeCodexRunner();
   const agent = new CodexTelegramAgent({
@@ -160,6 +180,13 @@ class FakeAgent implements TelegramAgentService {
   }
 }
 
+class SlowFakeAgent extends FakeAgent {
+  override async reply(): Promise<AgentReply> {
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    return super.reply();
+  }
+}
+
 class FakeCodexRunner implements CodexRunner {
   readonly threadIds: Array<string | undefined> = [];
   #sequence = 0;
@@ -179,6 +206,7 @@ class FakeCodexRunner implements CodexRunner {
 
 class FakeTelegramApi {
   sent: Array<{ chatId: number; text: string }> = [];
+  chatActions = 0;
 
   async deleteWebhook(): Promise<void> {}
   async getUpdates(): Promise<[]> { return []; }
@@ -188,7 +216,7 @@ class FakeTelegramApi {
     return message(chatId, 0, "private", text);
   }
 
-  async sendChatAction(): Promise<void> {}
+  async sendChatAction(): Promise<void> { this.chatActions += 1; }
   async answerCallbackQuery(): Promise<void> {}
   async clearInlineKeyboard(): Promise<void> {}
 }

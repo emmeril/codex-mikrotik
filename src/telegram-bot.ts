@@ -47,6 +47,7 @@ export class TelegramBot {
   readonly #allowedUserIds: ReadonlySet<string>;
   readonly #privateOnly: boolean;
   readonly #pollTimeoutSeconds: number;
+  readonly #typingRefreshMs: number;
   readonly #queues = new Map<string, Promise<void>>();
 
   constructor(options: {
@@ -55,12 +56,14 @@ export class TelegramBot {
     allowedUserIds: ReadonlySet<string>;
     privateOnly: boolean;
     pollTimeoutSeconds: number;
+    typingRefreshMs?: number;
   }) {
     this.#api = options.api;
     this.#agent = options.agent;
     this.#allowedUserIds = options.allowedUserIds;
     this.#privateOnly = options.privateOnly;
     this.#pollTimeoutSeconds = options.pollTimeoutSeconds;
+    this.#typingRefreshMs = options.typingRefreshMs ?? 4_000;
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -124,7 +127,13 @@ export class TelegramBot {
       return;
     }
 
+    const startedAt = Date.now();
+    let outcome = "ok";
     await this.#api.sendChatAction(message.chat.id, "typing").catch(() => undefined);
+    const typingTimer = setInterval(() => {
+      void this.#api.sendChatAction(message.chat.id, "typing").catch(() => undefined);
+    }, this.#typingRefreshMs);
+    typingTimer.unref();
     try {
       const reply = await this.#agent.reply(message.chat.id, userId, text);
       await this.#sendText(message.chat.id, reply.text);
@@ -132,8 +141,12 @@ export class TelegramBot {
         await this.#sendPlan(plan);
       }
     } catch (error) {
+      outcome = "error";
       const detail = error instanceof Error ? error.message : String(error);
       await this.#sendText(message.chat.id, `Permintaan gagal: ${detail}`);
+    } finally {
+      clearInterval(typingTimer);
+      console.error(`Telegram request outcome=${outcome} duration_ms=${Date.now() - startedAt}`);
     }
   }
 

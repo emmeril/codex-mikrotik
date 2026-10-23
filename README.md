@@ -88,7 +88,7 @@ Codex akan memakai tiga tool:
 
 ## Agent Telegram
 
-Agent Telegram menjalankan Codex CLI lokal yang sudah login dengan akun ChatGPT. Tidak diperlukan `OPENAI_API_KEY`. Codex memakai MCP `mikrotik` yang sudah terdaftar pada mesin ini untuk membaca router dan memahami permintaan pengguna. Mode long polling dipakai sehingga server tidak memerlukan domain publik, HTTPS, atau webhook.
+Agent Telegram menjalankan Codex App Server lokal yang sudah login dengan akun ChatGPT. Tidak diperlukan `OPENAI_API_KEY`. Satu proses Codex dipertahankan selama bot aktif agar setiap pesan tidak perlu memulai CLI baru. Codex memakai MCP `mikrotik` untuk membaca router dan memahami permintaan pengguna. Mode long polling dipakai sehingga server tidak memerlukan domain publik, HTTPS, atau webhook.
 
 Alur keamanannya:
 
@@ -97,7 +97,7 @@ Alur keamanannya:
 - credential ChatGPT diambil dari login Codex CLI lokal, tidak disalin ke `.env`
 - environment Codex memakai allowlist minimal sehingga token Telegram dan credential RouterOS tidak diwariskan
 - sesi berjalan di direktori sementara dengan permission profile filesystem minimal
-- konfigurasi pengguna diabaikan untuk sesi bot; Codex hanya diberi MCP `mikrotik` dengan tool `mikrotik_inspect` dan `mikrotik_query`
+- Codex hanya diberi MCP `mikrotik` dengan tool `mikrotik_inspect` dan `mikrotik_query`
 - pembacaan router berjalan langsung saat diperlukan
 - perubahan konfigurasi dibuat sebagai preview command dan attribute
 - perubahan baru dijalankan setelah pemilik menekan tombol `Jalankan`
@@ -128,11 +128,12 @@ TELEGRAM_BOT_TOKEN=TOKEN_DARI_BOTFATHER
 TELEGRAM_ALLOWED_USER_IDS=0
 TELEGRAM_PRIVATE_ONLY=true
 CODEX_TIMEOUT_SECONDS=300
+CODEX_TRANSPORT=app-server
 ```
 
 Jalankan bot sementara, kirim `/whoami` melalui Telegram, lalu ganti nilai `TELEGRAM_ALLOWED_USER_IDS=0` dengan ID yang diberikan bot. Beberapa ID dapat dipisahkan dengan koma. Restart bot sesudah mengubah allowlist.
 
-Secara default agent memakai model bawaan Codex. Jika perlu, model dapat dipilih dengan `CODEX_MODEL`, tetapi model tersebut harus tersedia pada akun ChatGPT yang sedang login.
+App Server memilih model default yang tersedia pada akun. Jika perlu, model dan reasoning effort dapat dipilih dengan `CODEX_MODEL` dan `CODEX_REASONING_EFFORT`. Set `CODEX_TRANSPORT=exec` untuk kembali ke proses CLI per pesan. `CODEX_SERVICE_TIER=fast` bersifat opsional dan memakai kuota lebih besar daripada mode standar.
 
 ### 2. Jalankan agent
 

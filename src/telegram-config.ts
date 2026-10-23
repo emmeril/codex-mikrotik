@@ -5,7 +5,10 @@ export interface TelegramAgentConfig {
   pollTimeoutSeconds: number;
   pendingChangeTtlMs: number;
   codexBinary: string;
+  codexTransport: "app-server" | "exec";
   codexModel?: string;
+  codexReasoningEffort?: string;
+  codexServiceTier?: string;
   codexTimeoutMs: number;
 }
 
@@ -56,6 +59,11 @@ export function loadTelegramAgentConfig(): TelegramAgentConfig {
     }
   }
 
+  const codexTransport = process.env.CODEX_TRANSPORT?.trim() || "app-server";
+  if (codexTransport !== "app-server" && codexTransport !== "exec") {
+    throw new Error("CODEX_TRANSPORT harus berupa app-server atau exec");
+  }
+
   return {
     botToken,
     allowedUserIds,
@@ -68,8 +76,15 @@ export function loadTelegramAgentConfig(): TelegramAgentConfig {
       3600,
     ) * 1_000,
     codexBinary: process.env.CODEX_BIN?.trim() || "codex",
+    codexTransport,
     ...(process.env.CODEX_MODEL?.trim()
       ? { codexModel: process.env.CODEX_MODEL.trim() }
+      : {}),
+    ...(process.env.CODEX_REASONING_EFFORT?.trim()
+      ? { codexReasoningEffort: process.env.CODEX_REASONING_EFFORT.trim() }
+      : {}),
+    ...(process.env.CODEX_SERVICE_TIER?.trim()
+      ? { codexServiceTier: process.env.CODEX_SERVICE_TIER.trim() }
       : {}),
     codexTimeoutMs: integerValue("CODEX_TIMEOUT_SECONDS", 300, 30, 1_800) * 1_000,
   };

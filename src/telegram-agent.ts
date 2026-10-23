@@ -56,6 +56,7 @@ export interface CodexRunResult {
 
 export interface CodexRunner {
   run(prompt: string, threadId?: string): Promise<CodexRunResult>;
+  close?(): Promise<void> | void;
 }
 
 export class PendingChangeStore {
@@ -153,7 +154,7 @@ const attributePairsJsonSchema = {
     additionalProperties: false,
   },
 };
-const outputJsonSchema = {
+export const codexOutputJsonSchema = {
   type: "object",
   properties: {
     message: { type: "string" },
@@ -188,7 +189,7 @@ const outputJsonSchema = {
   additionalProperties: false,
 };
 
-const agentInstructions = `Anda adalah operator MikroTik yang diakses melalui Telegram.
+export const telegramAgentInstructions = `Anda adalah operator MikroTik yang diakses melalui Telegram.
 Gunakan MCP mikrotik untuk memeriksa setiap fakta tentang router. Jangan menebak status atau konfigurasi.
 Jawab dengan bahasa pengguna, ringkas, jelas, dan cocok untuk layar ponsel.
 Untuk permintaan baca, gunakan mikrotik_inspect atau mikrotik_query dan isi changes dengan array kosong.
@@ -203,7 +204,7 @@ export class CodexCliRunner implements CodexRunner {
   readonly #cwd: string;
   readonly #model: string | undefined;
   readonly #timeoutMs: number;
-  #runtimeFiles?: Promise<{ directory: string; schemaPath: string }>;
+  #runtimeFiles: Promise<{ directory: string; schemaPath: string }> | undefined;
 
   constructor(options: {
     binary: string;
@@ -303,8 +304,14 @@ export class CodexCliRunner implements CodexRunner {
           reject(error);
         }
       });
-      child.stdin.end(`${agentInstructions}\n\nPesan pengguna:\n${prompt}`);
+      child.stdin.end(`${telegramAgentInstructions}\n\nPesan pengguna:\n${prompt}`);
     });
+  }
+
+  async close(): Promise<void> {
+    const runtime = this.#runtimeFiles ? await this.#runtimeFiles : undefined;
+    if (runtime) rmSync(runtime.directory, { recursive: true, force: true });
+    this.#runtimeFiles = undefined;
   }
 
   #getRuntimeFiles(): Promise<{ directory: string; schemaPath: string }> {
@@ -312,7 +319,7 @@ export class CodexCliRunner implements CodexRunner {
       this.#runtimeFiles = (async () => {
         const directory = await mkdtemp(join(tmpdir(), "codex-mikrotik-telegram-"));
         const schemaPath = join(directory, "response.schema.json");
-        await writeFile(schemaPath, JSON.stringify(outputJsonSchema), { mode: 0o600 });
+        await writeFile(schemaPath, JSON.stringify(codexOutputJsonSchema), { mode: 0o600 });
         process.once("exit", () => rmSync(directory, { recursive: true, force: true }));
         return { directory, schemaPath };
       })();
