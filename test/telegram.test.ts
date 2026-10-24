@@ -11,7 +11,11 @@ import {
   type PendingLookup,
   type TelegramAgentService,
 } from "../src/telegram-agent.js";
-import { splitTelegramText, type TelegramMessage } from "../src/telegram-api.js";
+import {
+  splitTelegramText,
+  type TelegramMessage,
+  type TelegramMessageEntity,
+} from "../src/telegram-api.js";
 import { TelegramBot } from "../src/telegram-bot.js";
 import { validateWriteOperation } from "../src/tools.js";
 
@@ -109,6 +113,33 @@ test("authorized messages receive agent output", async () => {
   assert.equal(api.sent.at(-1)?.text, "Router sehat.");
 });
 
+test("Markdown bold is rendered as a Telegram entity", async () => {
+  const api = new FakeTelegramApi();
+  const agent = new FakeAgent("Saat ini ada **131 sesi pengguna hotspot aktif** di router Ro-Emmeril.");
+  const bot = new TelegramBot({
+    api,
+    agent,
+    allowedUserIds: new Set(["42"]),
+    privateOnly: true,
+    pollTimeoutSeconds: 1,
+  });
+
+  await bot.handleUpdate({
+    update_id: 1,
+    message: message(10, 42, "private", "berapa user aktif?"),
+  });
+
+  assert.equal(
+    api.sent[0]?.text,
+    "Saat ini ada 131 sesi pengguna hotspot aktif di router Ro-Emmeril.",
+  );
+  assert.deepEqual(api.sent[0]?.entities, [{
+    type: "bold",
+    offset: 13,
+    length: "131 sesi pengguna hotspot aktif".length,
+  }]);
+});
+
 test("typing indicator is refreshed while Codex is working", async () => {
   const api = new FakeTelegramApi();
   const agent = new SlowFakeAgent();
@@ -164,9 +195,11 @@ function message(
 class FakeAgent implements TelegramAgentService {
   replyCalls = 0;
 
+  constructor(readonly response = "Router sehat.") {}
+
   async reply(): Promise<AgentReply> {
     this.replyCalls += 1;
-    return { text: "Router sehat.", pendingChanges: [] };
+    return { text: this.response, pendingChanges: [] };
   }
 
   reset(): void {}
@@ -205,14 +238,23 @@ class FakeCodexRunner implements CodexRunner {
 }
 
 class FakeTelegramApi {
-  sent: Array<{ chatId: number; text: string }> = [];
+  sent: Array<{
+    chatId: number;
+    text: string;
+    entities?: TelegramMessageEntity[];
+  }> = [];
   chatActions = 0;
 
   async deleteWebhook(): Promise<void> {}
   async getUpdates(): Promise<[]> { return []; }
 
-  async sendMessage(chatId: number, text: string): Promise<TelegramMessage> {
-    this.sent.push({ chatId, text });
+  async sendMessage(
+    chatId: number,
+    text: string,
+    _replyMarkup?: unknown,
+    entities?: TelegramMessageEntity[],
+  ): Promise<TelegramMessage> {
+    this.sent.push({ chatId, text, ...(entities?.length ? { entities } : {}) });
     return message(chatId, 0, "private", text);
   }
 

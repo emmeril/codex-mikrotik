@@ -33,6 +33,12 @@ export interface InlineKeyboardMarkup {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
 }
 
+export interface TelegramMessageEntity {
+  type: "bold";
+  offset: number;
+  length: number;
+}
+
 interface TelegramResponse<T> {
   ok: boolean;
   result?: T;
@@ -62,11 +68,13 @@ export class TelegramApi {
     chatId: number,
     text: string,
     replyMarkup?: InlineKeyboardMarkup,
+    entities?: TelegramMessageEntity[],
   ): Promise<TelegramMessage> {
     return this.#call<TelegramMessage>("sendMessage", {
       chat_id: chatId,
       text,
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      ...(entities?.length ? { entities } : {}),
     });
   }
 

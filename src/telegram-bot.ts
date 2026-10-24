@@ -3,6 +3,7 @@ import type {
   InlineKeyboardMarkup,
   TelegramCallbackQuery,
   TelegramMessage,
+  TelegramMessageEntity,
   TelegramUpdate,
 } from "./telegram-api.js";
 import { splitTelegramText, TelegramApi } from "./telegram-api.js";
@@ -35,6 +36,7 @@ interface TelegramBotApi {
     chatId: number,
     text: string,
     replyMarkup?: InlineKeyboardMarkup,
+    entities?: TelegramMessageEntity[],
   ): Promise<TelegramMessage>;
   sendChatAction(chatId: number, action: "typing"): Promise<void>;
   answerCallbackQuery(id: string, text?: string, showAlert?: boolean): Promise<void>;
@@ -214,7 +216,13 @@ export class TelegramBot {
     const chunks = splitTelegramText(text);
     for (const [index, chunk] of chunks.entries()) {
       const isLast = index === chunks.length - 1;
-      await this.#api.sendMessage(chatId, chunk, isLast ? replyMarkup : undefined);
+      const formatted = formatTelegramText(chunk);
+      await this.#api.sendMessage(
+        chatId,
+        formatted.text,
+        isLast ? replyMarkup : undefined,
+        formatted.entities,
+      );
     }
   }
 
@@ -238,6 +246,29 @@ export class TelegramBot {
 
 export function createTelegramApi(token: string): TelegramApi {
   return new TelegramApi(token);
+}
+
+export function formatTelegramText(text: string): {
+  text: string;
+  entities: TelegramMessageEntity[];
+} {
+  const entities: TelegramMessageEntity[] = [];
+  const pattern = /\*\*([^\n]+?)\*\*/g;
+  let formatted = "";
+  let cursor = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const content = match[1];
+    if (match.index === undefined || content === undefined || !content.trim()) continue;
+    formatted += text.slice(cursor, match.index);
+    const offset = formatted.length;
+    formatted += content;
+    entities.push({ type: "bold", offset, length: content.length });
+    cursor = match.index + match[0].length;
+  }
+
+  formatted += text.slice(cursor);
+  return { text: formatted, entities };
 }
 
 function commandName(text: string): string | undefined {
