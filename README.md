@@ -1,3 +1,5 @@
+> **ChatGPT Custom MCP:** An optional authenticated, stateless Streamable HTTP service and local terminal-approved writes are documented in [docs/chatgpt-mcp.md](docs/chatgpt-mcp.md). The Codex CLI stdio service and Telegram bot remain available unchanged.
+
 # Codex CLI untuk MikroTik RouterOS 6 dan 7
 
 MCP server lokal agar Codex CLI dapat membaca status dan, jika diaktifkan secara eksplisit, mengubah konfigurasi MikroTik. Koneksi memakai protokol RouterOS API native sehingga satu implementasi bekerja di RouterOS 6 dan 7.
