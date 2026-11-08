@@ -71,14 +71,14 @@ export function startHttpServers(config: HttpConfig = loadHttpConfig()) {
       const body = await readJson(req);
       const server = createMikrotikMcpServer({ config, approvals });
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
       res.once("close", () => {
         void transport.close().catch(() => {});
         void server.close().catch(() => {});
       });
-      await server.connect(transport);
+      // The SDK transport types differ under exactOptionalPropertyTypes despite implementing the same protocol.
+      await server.connect(transport as unknown as Parameters<typeof server.connect>[0]);
       await transport.handleRequest(req, res, body);
     } catch (error) {
       console.error("HTTP MCP request failed:", error instanceof Error ? error.message : "unknown error");
