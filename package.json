@@ -37,7 +37,7 @@
     "pm2:start": "pm2 start ecosystem.config.cjs --only mikrotik-telegram --env production",
     "pm2:restart": "pm2 restart mikrotik-telegram --update-env",
     "pm2:logs": "pm2 logs mikrotik-telegram",
-    "test": "node --import tsx --test test/**/*.test.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start:http": "node dist/http-server.js",
     "dev:http": "tsx src/http-server.ts",
