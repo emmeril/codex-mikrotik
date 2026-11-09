@@ -63,6 +63,24 @@ test("falls back to pre-6.43 challenge login", async (context) => {
   client.close();
 });
 
+test("handles RouterOS empty replies without treating them as a protocol failure", async (context) => {
+  const server = await mockServer(async (socket, reader) => {
+    await reader.readSentence();
+    socket.write(encodeSentence(["!done"]));
+    assert.deepEqual(await reader.readSentence(), ["/interface/print"]);
+    socket.write(encodeSentence(["!empty"]));
+    socket.write(encodeSentence(["!done"]));
+  });
+  context.after(() => server.close());
+  const client = new RouterOsClient(configFor(server));
+  try {
+    await client.connect();
+    assert.deepEqual(await client.command("/interface/print"), []);
+  } finally {
+    client.close();
+  }
+});
+
 async function mockServer(
   handler: (socket: Socket, reader: SentenceReader) => Promise<void>,
 ): Promise<Server> {

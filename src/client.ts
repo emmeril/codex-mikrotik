@@ -117,6 +117,7 @@ export class RouterOsClient {
       );
       const [type, ...parts] = sentence;
       const attributes = parseAttributes(parts);
+      if (type === "!empty") continue;
       if (type === "!re") {
         if (rows.length < rowLimit) rows.push(attributes);
         continue;

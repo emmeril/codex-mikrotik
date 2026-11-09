@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
+import { monitorEthernet, monitorTraffic, pingRouter } from "./diagnostics.js";
+import { NETWORK_ENGINEER_INSTRUCTIONS, NETWORK_GUIDES, networkGuide } from "./network-engineer.js";
 import {
   INSPECTION_TARGETS,
   inspectRouter,
@@ -25,14 +27,57 @@ export function createMikrotikMcpServer(
   const server = new McpServer({
     name: "codex-mikrotik",
     version: "0.2.0",
-  });
+  }, { instructions: NETWORK_ENGINEER_INSTRUCTIONS });
+
+  const interfacesSchema = z.array(z.string().min(1).max(100)).min(1).max(16)
+    .describe("Exact interface names discovered from the router, for example ISP-1. No all or comma-separated selectors.");
+
+  server.registerTool("mikrotik_ethernet_monitor", {
+    title: "Read actual Ethernet link rate",
+    description: "Read negotiated link rate, duplex and link status using bounded /interface/ethernet/monitor once. Use this for actual port speed. /interface/ethernet/print speed is configuration, not negotiated rate. Does not run a speed test or change configuration.",
+    inputSchema: { interfaces: interfacesSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ interfaces }) => toolResult(() => monitorEthernet(interfaces)));
+
+  server.registerTool("mikrotik_traffic", {
+    title: "Read current interface RX/TX traffic",
+    description: "Take one /interface/monitor-traffic snapshot per interface. RX/TX are bits/s from the router perspective. These are current traffic rates, not link capacity or ISP subscription speed.",
+    inputSchema: { interfaces: interfacesSchema },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ interfaces }) => toolResult(() => monitorTraffic(interfaces)));
+
+  server.registerTool("mikrotik_ping", {
+    title: "Run a bounded ICMP connectivity probe",
+    description: "Send 1-10 ICMP probes from the router without configuration changes. Read routing first for multi-WAN; source address alone does not prove ISP selection. A successful router ping does not verify client forwarding/NAT. Unsupported version-specific parameters return an error.",
+    inputSchema: {
+      address: z.string().min(1).max(253),
+      count: z.number().int().min(1).max(10).default(5),
+      interface: z.string().min(1).max(100).optional(),
+      src_address: z.string().min(1).max(45).optional(),
+      routing_table: z.string().min(1).max(100).optional(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, async (options) => toolResult(() => pingRouter(options)));
+
+  server.registerTool("mikrotik_guide", {
+    title: "MikroTik diagnosis runbooks",
+    description: "Read a topic-specific network engineering checklist and official MikroTik references. Use for interfaces, multi-WAN/routing, firewall/NAT, VLAN, DHCP/DNS, Hotspot/PPPoE, VPN, queues or Wi-Fi. Guidance is not observed router state.",
+    inputSchema: {
+      topic: z.enum(Object.keys(NETWORK_GUIDES) as [keyof typeof NETWORK_GUIDES, ...(keyof typeof NETWORK_GUIDES)[]]),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async ({ topic }) => toolResult(() => networkGuide(topic)));
+
+  server.registerResource("network-engineering", "mikrotik://knowledge/network-engineering", {
+    title: "MikroTik network engineering guidance", mimeType: "text/plain",
+  }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/plain", text: NETWORK_ENGINEER_INSTRUCTIONS }] }));
 
   server.registerTool(
     "mikrotik_inspect",
     {
       title: "Inspect MikroTik",
       description:
-        "Read operational data from a MikroTik RouterOS 6 or 7 router. Use target=router to verify connectivity and version.",
+        "Read operational data from a MikroTik RouterOS 6 or 7 router. Use target=router to verify connectivity and version. Ethernet speed here is configuration; use mikrotik_ethernet_monitor for negotiated rate. Returned rows may be capped by limit.",
       inputSchema: {
         target: z
           .enum(["router", ...Object.keys(INSPECTION_TARGETS)] as [

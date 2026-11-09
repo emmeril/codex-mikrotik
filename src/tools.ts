@@ -3,11 +3,25 @@ import { loadConfig, type RouterOsConfig } from "./config.js";
 
 export const INSPECTION_TARGETS = {
   interfaces: "/interface/print",
+  ethernet: "/interface/ethernet/print",
+  bridge_ports: "/interface/bridge/port/print",
+  bridge_vlans: "/interface/bridge/vlan/print",
+  vlans: "/interface/vlan/print",
   ip_addresses: "/ip/address/print",
   routes: "/ip/route/print",
   arp: "/ip/arp/print",
   dhcp_leases: "/ip/dhcp-server/lease/print",
+  dhcp_clients: "/ip/dhcp-client/print",
   firewall_filter: "/ip/firewall/filter/print",
+  firewall_nat: "/ip/firewall/nat/print",
+  firewall_mangle: "/ip/firewall/mangle/print",
+  simple_queues: "/queue/simple/print",
+  queue_tree: "/queue/tree/print",
+  ppp_active: "/ppp/active/print",
+  hotspot_active: "/ip/hotspot/active/print",
+  ipv6_addresses: "/ipv6/address/print",
+  ipv6_routes: "/ipv6/route/print",
+  ipv6_firewall: "/ipv6/firewall/filter/print",
   neighbors: "/ip/neighbor/print",
   dns_cache: "/ip/dns/cache/print",
   logs: "/log/print",
@@ -47,10 +61,10 @@ export async function inspectRouter(
     if (target === "router") {
       const identity = await client.command("/system/identity/print", { limit: 1 });
       const resource = await client.command("/system/resource/print", { limit: 1 });
-      return { identity: identity[0] ?? {}, resource: resource[0] ?? {} };
+      return { observed_at: new Date().toISOString(), identity: identity[0] ?? {}, resource: resource[0] ?? {} };
     }
     const rows = await client.command(INSPECTION_TARGETS[target], { limit });
-    return { target, count: rows.length, rows };
+    return { observed_at: new Date().toISOString(), target, count: rows.length, limit, rows };
   });
 }
 
@@ -61,10 +75,15 @@ export async function runReadCommand(
   const config = loadConfig();
   validateReadCommand(command, config);
   validateOptions(options);
+  for (const key of Object.keys(options.attributes ?? {})) {
+    if (["file", "follow", "follow-only", "interval"].includes(key.toLowerCase())) {
+      throw new Error(`Attribute ${key} tidak diizinkan untuk pembacaan sekali jalan`);
+    }
+  }
   return withClient(
     async (client) => {
       const rows = await client.command(command, options);
-      return { command, count: rows.length, rows };
+      return { observed_at: new Date().toISOString(), command, count: rows.length, limit: options.limit ?? config.maxRows, rows };
     },
     config,
   );
@@ -125,7 +144,7 @@ function validateWriteCommand(command: string): void {
 }
 
 function validateCommandPath(command: string): void {
-  if (!/^\/[a-zA-Z0-9._/-]+$/.test(command) || command.includes("..")) {
+  if (!/^\/[a-zA-Z0-9._/-]+$/.test(command) || command.includes("..") || command.includes("//")) {
     throw new Error("Command RouterOS tidak valid");
   }
 }
@@ -148,7 +167,7 @@ function validateOptions(options: CommandOptions): void {
   }
 }
 
-async function withClient<T>(
+export async function withClient<T>(
   operation: (client: RouterOsClient) => Promise<T>,
   config: RouterOsConfig = loadConfig(),
 ): Promise<T> {

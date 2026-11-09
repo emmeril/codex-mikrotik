@@ -4,6 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { READ_ONLY_TOOL_NAMES } from "./network-engineer.js";
 import {
   buildCodexEnvironment,
   codexOutputJsonSchema,
@@ -174,7 +175,7 @@ export class CodexAppServerRunner implements CodexRunner {
         join(this.#cwd, "dist/server.js"),
       ])}`,
       'mcp_servers.mikrotik.required=true',
-      'mcp_servers.mikrotik.enabled_tools=["mikrotik_inspect","mikrotik_query"]',
+      `mcp_servers.mikrotik.enabled_tools=${JSON.stringify(READ_ONLY_TOOL_NAMES)}`,
       'mcp_servers.mikrotik.disabled_tools=["mikrotik_execute"]',
     ].flatMap((value) => ["-c", value]);
     const child = spawn(this.#binary, ["app-server", "--stdio", ...config], {

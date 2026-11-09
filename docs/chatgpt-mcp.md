@@ -2,7 +2,7 @@
 
 The project retains two independent integrations:
 - Codex CLI: original stdio MCP entrypoint at dist/server.js, including its existing tool set.
-- Telegram: existing Codex agent, unchanged.
+- Telegram: Codex agent with shared network engineering guidance and bounded diagnostics.
 - ChatGPT HTTP: optional stateless Streamable HTTP endpoint at dist/http-server.js.
 
 ## Recommended: Secure MCP Tunnel
@@ -47,10 +47,20 @@ preferable when available.
 The HTTP MCP offers:
 - mikrotik_inspect: operational readings
 - mikrotik_query: existing safe /print and /getall reads
+- mikrotik_ethernet_monitor: actual negotiated Ethernet rate and duplex
+- mikrotik_traffic: one RX/TX traffic snapshot per interface
+- mikrotik_ping: bounded ICMP probes from the router
+- mikrotik_guide: topic runbooks with official MikroTik references
 - mikrotik_prepare_change: preview one exact RouterOS write
 - mikrotik_commit_change: consume an approved one-time preview
 
 It intentionally does NOT expose the original mikrotik_execute tool.
+
+All transports use the guidance in [network-engineering.md](network-engineering.md).
+MCP initialization includes diagnosis instructions; the same text is available
+as the `mikrotik://knowledge/network-engineering` resource. Tool-only clients can
+use `mikrotik_guide`. Reconnect or refresh the client after deploying a build to
+discover new tools.
 
 Keep HTTP writes disabled until a tested read-only deployment is running.
 For changes, set these environment variables to secure values:

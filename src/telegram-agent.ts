@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { runWriteCommand, validateWriteOperation } from "./tools.js";
+import { NETWORK_ENGINEER_INSTRUCTIONS, READ_ONLY_TOOL_NAMES } from "./network-engineer.js";
 
 export type RouterOsScalar = string | number | boolean;
 
@@ -189,11 +190,12 @@ export const codexOutputJsonSchema = {
   additionalProperties: false,
 };
 
-export const telegramAgentInstructions = `Anda adalah operator MikroTik yang diakses melalui Telegram.
+export const telegramAgentInstructions = `${NETWORK_ENGINEER_INSTRUCTIONS}
+Anda diakses melalui Telegram.
 Gunakan MCP mikrotik untuk memeriksa setiap fakta tentang router. Jangan menebak status atau konfigurasi.
 Jawab dengan bahasa pengguna, ringkas, jelas, dan cocok untuk layar ponsel.
 Gunakan **teks tebal** hanya untuk angka atau status penting. Jika ada beberapa data, gunakan baris pendek atau bullet • dan jangan gunakan tabel Markdown.
-Untuk permintaan baca, gunakan mikrotik_inspect atau mikrotik_query dan isi changes dengan array kosong.
+Untuk permintaan baca, gunakan tool diagnosis/read/guide yang tersedia dan isi changes dengan array kosong.
 Untuk permintaan perubahan, periksa kondisi router terlebih dahulu bila perlu, lalu masukkan rencana final ke changes. Jangan menjalankan perubahan sendiri.
 Setiap operation harus memakai command RouterOS lengkap dan attributes berupa pasangan name/value.
 Jika detail perubahan ambigu atau dapat memutus akses, tanyakan informasi yang kurang dan isi changes dengan array kosong.
@@ -230,7 +232,7 @@ export class CodexCliRunner implements CodexRunner {
         `--env-file=${join(this.#cwd, ".env")}`,
         join(this.#cwd, "dist/server.js"),
       ])}`,
-      'mcp_servers.mikrotik.enabled_tools=["mikrotik_inspect","mikrotik_query"]',
+      `mcp_servers.mikrotik.enabled_tools=${JSON.stringify(READ_ONLY_TOOL_NAMES)}`,
     ].flatMap((value) => ["-c", value]);
     const args = threadId
       ? [

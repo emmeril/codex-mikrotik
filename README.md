@@ -1,4 +1,4 @@
-> **ChatGPT Custom MCP:** An optional authenticated, stateless Streamable HTTP service and local terminal-approved writes are documented in [docs/chatgpt-mcp.md](docs/chatgpt-mcp.md). The Codex CLI stdio service and Telegram bot remain available unchanged.
+> **ChatGPT Custom MCP:** An optional authenticated, stateless Streamable HTTP service and local terminal-approved writes are documented in [docs/chatgpt-mcp.md](docs/chatgpt-mcp.md). The Codex CLI stdio service and Telegram bot also use the shared diagnosis tools and guidance.
 
 # Codex CLI untuk MikroTik RouterOS 6 dan 7
 
@@ -11,6 +11,8 @@ Fitur utama:
 - fallback challenge-response untuk ROS sebelum 6.43
 - tool siap pakai untuk resource router, interface, IP, route, ARP, DHCP lease, firewall, neighbor, DNS cache, dan log
 - query `/print` atau `/getall` untuk menu RouterOS lain
+- monitor rate link aktual, trafik RX/TX, dan ping terbatas tanpa mengubah konfigurasi
+- panduan diagnosis routing, VLAN, firewall, DHCP/DNS, Hotspot/PPPoE, VPN, queue dan Wi-Fi melalui `mikrotik_guide`
 - operasi tulis mati secara default dan dibatasi ke aksi yang diizinkan
 - path yang lazim berisi password, private key, atau secret diblokir secara default
 
@@ -30,6 +32,8 @@ Jalankan di terminal MikroTik sebagai administrator. Ganti subnet dengan alamat 
 /user add name=codex group=codex-read password="PASSWORD_KUAT"
 /ip service set api disabled=no port=8728 address=192.168.88.0/24
 ```
+
+Tool ping memerlukan policy RouterOS `test` selain `api,read`. Administrator dapat menambahkannya bila probe dibutuhkan. Policy `test` juga mencakup kemampuan lain di RouterOS; MCP tetap membatasi tool probe ke ping 1 sampai 10 paket. Jika izin ditolak, agent harus melaporkan keterbatasan itu. Lihat [policy user MikroTik](https://help.mikrotik.com/docs/spaces/ROS/pages/8978504/User).
 
 Untuk penggunaan baca-tulis, buat group terpisah. Aktifkan hanya saat dibutuhkan:
 
@@ -80,13 +84,19 @@ Periksa default route dan DHCP lease aktif.
 Tampilkan rule firewall filter yang disabled.
 ```
 
-Codex akan memakai tiga tool:
+Tool yang tersedia:
 
 | Tool | Fungsi | Default |
 | --- | --- | --- |
 | `mikrotik_inspect` | Membaca kelompok data umum | Aktif |
 | `mikrotik_query` | Menjalankan `/print` atau `/getall` | Aktif |
+| `mikrotik_ethernet_monitor` | Rate link dan duplex aktual, monitor sekali jalan | Aktif |
+| `mikrotik_traffic` | Sampel RX/TX bits/s per interface | Aktif |
+| `mikrotik_ping` | Probe ICMP 1 sampai 10 paket dari router | Aktif |
+| `mikrotik_guide` | Runbook diagnosis dengan sumber resmi MikroTik | Aktif |
 | `mikrotik_execute` | `add`, `set`, `remove`, `enable`, `disable`, `move`, `reset-counters` | Nonaktif |
+
+Alur diagnosis, contoh input tool, batas kesimpulan dan aktivasi dijelaskan dalam [panduan network engineering](docs/network-engineering.md). Rate Ethernet aktual berasal dari monitor, sedangkan `speed` pada hasil konfigurasi tidak membuktikan hasil negosiasi link.
 
 ## Agent Telegram
 
@@ -99,7 +109,7 @@ Alur keamanannya:
 - credential ChatGPT diambil dari login Codex CLI lokal, tidak disalin ke `.env`
 - environment Codex memakai allowlist minimal sehingga token Telegram dan credential RouterOS tidak diwariskan
 - sesi berjalan di direktori sementara dengan permission profile filesystem minimal
-- Codex hanya diberi MCP `mikrotik` dengan tool `mikrotik_inspect` dan `mikrotik_query`
+- Codex hanya diberi MCP `mikrotik` dengan tool baca, monitor, ping terbatas dan panduan diagnosis
 - pembacaan router berjalan langsung saat diperlukan
 - perubahan konfigurasi dibuat sebagai preview command dan attribute
 - perubahan baru dijalankan setelah pemilik menekan tombol `Jalankan`
@@ -266,6 +276,6 @@ Server memakai stdio untuk MCP. Jangan menulis log biasa ke stdout karena dapat 
 
 ## Batasan
 
-- Proyek tidak membuka port lokal; Codex menjalankan proses MCP via stdio.
+- Transport stdio tidak membuka port lokal. Transport HTTP opsional membuka listener loopback sesuai konfigurasinya.
 - API lama memakai MD5 challenge hanya untuk kompatibilitas. Keamanan transport tetap bergantung pada LAN/VPN atau API SSL.
 - Kompatibilitas login diuji otomatis dengan server tiruan. Uji terhadap perangkat fisik tetap diperlukan karena konfigurasi service, policy, dan TLS berbeda per router.
