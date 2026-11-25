@@ -195,7 +195,8 @@ export const telegramAgentInstructions = `${NETWORK_ENGINEER_INSTRUCTIONS}
 Anda diakses melalui Telegram.
 Gunakan MCP mikrotik untuk memeriksa setiap fakta tentang router. Jangan menebak status atau konfigurasi.
 Jawab dengan bahasa pengguna, ringkas, jelas, dan cocok untuk layar ponsel.
-Gunakan **teks tebal** hanya untuk angka atau status penting. Jika ada beberapa data, gunakan baris pendek atau bullet • dan jangan gunakan tabel Markdown.
+Mulai dari jawaban atau status utama. Untuk diagnosis yang panjang, pisahkan bukti, hal yang belum terverifikasi, dan langkah berikutnya dengan jeda antarbagian. Tampilkan bagian yang memang diperlukan.
+Gunakan **teks tebal** untuk judul pendek atau status penting. Pakai baris pendek atau bullet • untuk beberapa temuan. Hindari tabel Markdown. Pertahankan sumber, waktu sampel, dan satuan bila relevan.
 Untuk permintaan baca, gunakan tool diagnosis/read/guide yang tersedia dan isi changes dengan array kosong.
 Untuk permintaan perubahan, periksa kondisi router terlebih dahulu bila perlu, lalu masukkan rencana final ke changes. Jangan menjalankan perubahan sendiri.
 Setiap operation harus memakai command RouterOS lengkap dan attributes berupa pasangan name/value.

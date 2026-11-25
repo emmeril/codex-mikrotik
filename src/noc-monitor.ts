@@ -3,6 +3,7 @@ import { RouterOsError, type RouterOsRecord } from "./client.js";
 import type { RouterOsConfig } from "./config.js";
 import { monitorEthernet } from "./diagnostics.js";
 import { NocLogReadError, type NocLogWatcher } from "./noc-logs.js";
+import { telegramLiteral, telegramTime } from "./telegram-api.js";
 import type { NocConfig } from "./telegram-config.js";
 import { withClient } from "./tools.js";
 
@@ -191,8 +192,8 @@ export class NocMonitor {
   status(): string {
     const latest = this.#latest;
     return latest
-      ? this.#format("NOC · Pembacaan terakhir", latest)
-      : "NOC belum selesai mengambil sampel pertama.";
+      ? this.#format("Status NOC", latest, true)
+      : "**Status NOC**\nSampel pertama sedang diambil. Coba /noc lagi sebentar.";
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -228,8 +229,8 @@ export class NocMonitor {
     const pending = this.#outbox[0];
     if (!pending) return;
     const missed = this.#droppedNotifications
-      ? `\n${this.#droppedNotifications} notifikasi terdahulu terlewat karena antrean penuh.` : "";
-    const title = pending.readings.length ? "NOC · Perubahan status" : "NOC · Kejadian log";
+      ? `\n\n${this.#droppedNotifications} notifikasi terdahulu terlewat karena antrean penuh.` : "";
+    const title = pending.readings.length ? "Perubahan status NOC" : "Kejadian log MikroTik";
     await this.options.notify(this.#format(title, pending) + missed);
     this.#outbox.shift();
     this.#droppedNotifications = 0;
@@ -243,7 +244,8 @@ export class NocMonitor {
         const stillRelevant = faults.some(({ key, state }) =>
           this.#latest?.readings.some((reading) => reading.key === key && reading.state === state));
         if (!signal.aborted && stillRelevant) {
-          await this.options.notify(`NOC · Diagnosis awal untuk sampel ${pending.observedAt}\n\n${analysis}\n\nUntuk meminta perubahan, balas lewat chat bot. Rencana akan ditampilkan untuk ditinjau.`);
+          const identity = telegramLiteral(this.options.config.expectedIdentity);
+          await this.options.notify(`**Diagnosis awal**\n${identity} · Sampel ${telegramTime(pending.observedAt)}\n\n${analysis}\n\nJika perlu perubahan, minta bot menyiapkan rencananya untuk ditinjau.`);
         }
       })
       .catch(() => console.error("NOC gagal menyelesaikan atau mengirim diagnosis lanjutan."))
@@ -261,17 +263,26 @@ export class NocMonitor {
     return true;
   }
 
-  #format(title: string, snapshot: NocSnapshot): string {
-    const labels = { ok: "OK", fault: "TERGANGGU", unknown: "BELUM TERUKUR" };
-    return [
-      `${title} · ${this.options.config.expectedIdentity}`,
-      snapshot.observedAt,
-      ...snapshot.readings.map(({ key, state, detail }) => {
+  #format(title: string, snapshot: NocSnapshot, status = false): string {
+    const identity = telegramLiteral(this.options.config.expectedIdentity);
+    const sections = [`**${title}**\n${identity} · ${telegramTime(snapshot.observedAt)}`];
+    for (const [state, label] of [
+      ["fault", "Gangguan"], ["unknown", "Belum terukur"], ["ok", status ? "Normal" : "Pulih"],
+    ] as const) {
+      const readings = snapshot.readings.filter((reading) => reading.state === state);
+      if (!readings.length) continue;
+      const lines = readings.map(({ key, detail }) => {
         const ref = this.options.incidentRef?.(key, snapshot.observedAt);
-        return `• ${key} [${labels[state]}]${ref ? ` ${ref}` : ""} ${detail}`;
-      }),
-      ...(snapshot.logAlerts?.map((alert) => `• [LOG] ${alert}`) ?? []),
-      "Hasil ini berlaku untuk sumber dan titik pengamatan yang tertera. Perangkat atau layanan tanpa pengukuran belum terverifikasi.",
-    ].join("\n");
+        return `• ${telegramLiteral(key)}${ref ? ` · ${telegramLiteral(ref)}` : ""} · ${telegramLiteral(detail)}`;
+      });
+      sections.push([`**${label}**`, ...lines].join("\n"));
+    }
+    if (snapshot.logAlerts?.length) sections.push([
+      ...(snapshot.readings.length ? ["**Kejadian log**"] : []),
+      ...snapshot.logAlerts.map((alert) => `• ${telegramLiteral(alert)}`),
+    ].join("\n"));
+    if (status) sections.push("Status berlaku untuk jalur dan perangkat yang diperiksa.");
+    else if (snapshot.readings.length) sections.push("Lihat riwayat pemeriksaan di /noc_incidents.");
+    return sections.join("\n\n");
   }
 }

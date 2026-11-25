@@ -9,7 +9,7 @@ import { NocLogWatcher } from "./noc-logs.js";
 import { loadNocInventory } from "./noc-inventory.js";
 import { measureNoc } from "./noc-measurements.js";
 import { NocOperations, reportHour } from "./noc-operations.js";
-import { splitTelegramText } from "./telegram-api.js";
+import { sendTelegramText } from "./telegram-api.js";
 
 async function main(): Promise<void> {
   const config = loadTelegramAgentConfig();
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   const dailyHour = nocConfig ? reportHour(process.env.NOC_REPORT_HOUR_WIB) : undefined;
   const notifyNoc = async (message: string) => {
     if (!nocConfig) return;
-    for (const chunk of splitTelegramText(message)) await api.sendMessage(nocConfig.recipient, chunk);
+    await sendTelegramText(api, nocConfig.recipient, message);
   };
   const operations = nocConfig && inventory ? new NocOperations({
     routerIdentity: nocConfig.expectedIdentity, inventory, notify: notifyNoc,

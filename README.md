@@ -214,6 +214,8 @@ Perintah bot:
 
 NOC berjalan di proses bot Telegram. Set `NOC_ENABLED=true` pada konfigurasi layanan, dengan `NOC_TELEGRAM_USER_ID` berisi satu ID di `TELEGRAM_ALLOWED_USER_IDS`. Penerima perlu membuka chat pribadi dengan bot terlebih dahulu. Isi `NOC_EXPECTED_ROUTER` dengan nama persis dari `/system/identity`, `NOC_ETHERNET_INTERFACES` dengan nama port yang memang diharapkan aktif, dan `NOC_IPV4_ROUTE_TABLES` dengan tabel yang perlu mempunyai default IPv4 aktif. Pada RouterOS 6 gunakan `main` untuk rute tanpa routing mark dan nama mark untuk tabel lain.
 
+Bot mendaftarkan menu perintah Telegram di chat pribadi penerima NOC. Ketik `/` untuk memilih perintah atau `/help` untuk membaca petunjuknya.
+
 Bot menunggu 30 detik antarsampel secara default. Setelah tiga sampel berurutan menunjukkan status berbeda, bot melaporkan gangguan, pembacaan yang belum berhasil, atau pemulihan pada pemeriksaan tersebut. Setelah memberi kabar, Codex dapat memeriksa gangguan link atau rute lebih lanjut dalam sesi diagnosis tersendiri. Pemantauan hanya membaca router. Untuk menerapkan perbaikan, minta perubahan lewat chat, tinjau preview, lalu tekan `Jalankan` jika operasi tulis aktif.
 
 `/noc` menunjukkan sampel terakhir beserta waktunya. Status API, link dan rute tidak menguji internet dari sisi klien. Jika Telegram tidak terjangkau, bot menyimpan hingga 32 notifikasi di memori untuk dikirim saat koneksi kembali. Antrean notifikasi dan riwayat pembanding dimulai ulang saat proses bot dimulai ulang.

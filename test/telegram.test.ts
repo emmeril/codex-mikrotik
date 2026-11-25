@@ -12,7 +12,12 @@ import {
   type TelegramAgentService,
 } from "../src/telegram-agent.js";
 import {
+  formatTelegramText,
+  splitFormattedTelegramText,
   splitTelegramText,
+  telegramLiteral,
+  type InlineKeyboardMarkup,
+  type TelegramBotCommand,
   type TelegramMessage,
   type TelegramMessageEntity,
 } from "../src/telegram-api.js";
@@ -60,6 +65,40 @@ test("long Telegram messages are split below the platform limit", () => {
   assert.ok(chunks.length > 1);
   assert.ok(chunks.every((chunk) => chunk.length <= 500));
   assert.match(chunks.at(-1) ?? "", /tail/);
+});
+
+test("Telegram formatting survives message splits and keeps code and escaped values literal", () => {
+  const bold = "🟢".repeat(15);
+  const literal = "**raw** `keep` \\";
+  const block = '{"comment":"**raw** `keep`"}';
+  const rendered = formatTelegramText([`~**${bold}**`, telegramLiteral(literal), "```json", block, "```", ""].join("\n"));
+  const chunks = splitFormattedTelegramText(rendered, 20);
+
+  assert.equal(chunks.map((chunk) => chunk.text).join(""), `~${bold}\n${literal}\n${block}\n`);
+  const parts = (type: TelegramMessageEntity["type"]) => chunks.flatMap((chunk) => chunk.entities
+    .filter((entity) => entity.type === type).map(({ offset, length }) => chunk.text.slice(offset, offset + length))).join("");
+  assert.equal(parts("bold"), bold);
+  assert.equal(parts("pre"), block);
+  assert.ok(chunks.every((chunk) => chunk.text.length <= 20 && !/[\ud800-\udbff]$/.test(chunk.text)));
+});
+
+test("change preview keeps exact attributes and places its confirmation keyboard after all chunks", async () => {
+  const api = new FakeTelegramApi();
+  const store = new PendingChangeStore(60_000);
+  const attributes = { ".id": "*1", comment: "**literal** `value`".repeat(390) };
+  const plan = store.create(42, "42", "Ubah comment", [{ command: "/interface/set", attributes }]);
+  const agent = new class extends FakeAgent {
+    override async reply(): Promise<AgentReply> { return { text: "Rencana siap.", pendingChanges: [plan] }; }
+  }();
+  const bot = new TelegramBot({ api, agent, allowedUserIds: new Set(["42"]), privateOnly: true, pollTimeoutSeconds: 1 });
+  await bot.handleUpdate({ update_id: 1, message: message(42, 42, "private", "ubah comment") });
+  const preview = api.sent.slice(1);
+  const code = preview.flatMap((chunk) => (chunk.entities ?? []).filter((entity) => entity.type === "pre")
+    .map(({ offset, length }) => chunk.text.slice(offset, offset + length))).join("");
+  assert.equal(code, `1. /interface/set\n${JSON.stringify(attributes, null, 2)}`);
+  assert.ok(preview.length > 1);
+  assert.ok(preview.slice(0, -1).every((chunk) => !chunk.replyMarkup));
+  assert.equal(preview.at(-1)?.replyMarkup?.inline_keyboard[0]?.[0]?.callback_data, `confirm:${plan.id}`);
 });
 
 test("Telegram change previews reject non-allowlisted RouterOS actions", () => {
@@ -235,6 +274,38 @@ test("NOC status only appears in the configured recipient's private chat", async
   assert.equal(agent.replyCalls, 0);
 });
 
+test("bot startup registers supported commands only for an allowlisted NOC recipient", async () => {
+  for (const allowed of [true, false]) {
+    const controller = new AbortController();
+    const menus: { chatId: number; commands: TelegramBotCommand[] }[] = [];
+    const api = new class extends FakeTelegramApi {
+      override async getUpdates(): Promise<[]> {
+        controller.abort();
+        return [];
+      }
+      async setMyCommands(chatId: number, commands: TelegramBotCommand[]): Promise<void> {
+        menus.push({ chatId, commands });
+      }
+    }();
+    const bot = new TelegramBot({
+      api, agent: new FakeAgent(), allowedUserIds: new Set(allowed ? ["42", "43"] : ["43"]), privateOnly: true,
+      pollTimeoutSeconds: 1, noc: {
+        recipient: 42, status: () => "Status", command: async () => "NOC",
+      },
+    });
+    await bot.run(controller.signal);
+    if (!allowed) {
+      assert.deepEqual(menus, []);
+      continue;
+    }
+    assert.deepEqual(menus.map((menu) => menu.chatId), [42]);
+    assert.deepEqual(menus[0]?.commands.map((item) => item.command), [
+      "noc", "noc_inventory", "noc_report", "noc_incidents", "noc_ack", "noc_escalate", "noc_customer",
+      "start", "help", "new", "whoami",
+    ]);
+  }
+});
+
 function message(
   chatId: number,
   userId: number,
@@ -299,6 +370,7 @@ class FakeTelegramApi {
     chatId: number;
     text: string;
     entities?: TelegramMessageEntity[];
+    replyMarkup?: InlineKeyboardMarkup;
   }> = [];
   chatActions = 0;
 
@@ -308,10 +380,10 @@ class FakeTelegramApi {
   async sendMessage(
     chatId: number,
     text: string,
-    _replyMarkup?: unknown,
+    replyMarkup?: InlineKeyboardMarkup,
     entities?: TelegramMessageEntity[],
   ): Promise<TelegramMessage> {
-    this.sent.push({ chatId, text, ...(entities?.length ? { entities } : {}) });
+    this.sent.push({ chatId, text, ...(entities?.length ? { entities } : {}), ...(replyMarkup ? { replyMarkup } : {}) });
     return message(chatId, 0, "private", text);
   }
 

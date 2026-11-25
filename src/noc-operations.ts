@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import * as z from "zod/v4";
 import type { NocInventory } from "./noc-inventory.js";
 import type { NocReading, NocSnapshot } from "./noc-monitor.js";
+import { telegramLiteral, telegramTime } from "./telegram-api.js";
 
 const iso = z.iso.datetime();
 const incidentSchema = z.object({
@@ -37,7 +38,6 @@ type Tally = z.output<typeof tallySchema>;
 const wib = (isoTime: string) => new Date(Date.parse(isoTime) + 7 * 3_600_000);
 const dayOf = (isoTime: string) => wib(isoTime).toISOString().slice(0, 10);
 const dayBefore = (day: string, offset = 1) => new Date(Date.parse(day) - offset * 86_400_000).toISOString().slice(0, 10);
-const operatorTime = (value: string) => `${wib(value).toISOString().slice(0, 19).replace("T", " ")} WIB`;
 
 export class NocOperations {
   readonly #file: string;
@@ -205,27 +205,36 @@ export class NocOperations {
 
   #inventory(): string {
     const { assets, queues, backups, links } = this.options.inventory;
-    const lines = [`Inventaris NOC · ${this.options.routerIdentity}`, "Router utama · RouterOS API"];
-    for (const asset of assets) {
-      lines.push(`• ${asset.id} · ${asset.label} · ${asset.kind.toUpperCase()} · ${asset.probe.kind.toUpperCase()}${asset.parent ? ` · parent ${asset.parent}` : ""}`);
-    }
-    if (!assets.some((asset) => asset.id !== "router-utama")) lines.push("Endpoint perangkat tambahan belum didaftarkan.");
-    lines.push(`Pelanggan/segmen dengan queue terdaftar ${queues.length}, kapasitas link terdaftar ${links.length}, sumber backup ${backups.length}.`);
-    return lines.join("\n");
+    const primary = assets.find((asset) => asset.id === "router-utama");
+    const devices = assets.filter((asset) => asset !== primary);
+    return [
+      `**Inventaris NOC**\n${telegramLiteral(this.options.routerIdentity)} · RouterOS API${primary ? " + ICMP" : ""}`,
+      devices.length ? ["**Perangkat tambahan**", ...devices.map((asset) =>
+        `• ${telegramLiteral(asset.label)} (${asset.id}) · ${asset.kind.toUpperCase()} · ${asset.probe.kind.toUpperCase()}${asset.parent ? ` · induk ${asset.parent}` : ""}`,
+      )].join("\n") : "Belum ada perangkat tambahan terdaftar.",
+      `**Cakupan pemantauan**\n• ${queues.length} queue pelanggan atau segmen\n• ${links.length} link dengan data kapasitas\n• ${backups.length} sumber backup`,
+    ].join("\n\n");
   }
 
   #incidents(): string {
     const all = this.#state.incidents;
     const open = all.filter((item) => !item.closedAt);
     const closed = all.filter((item) => item.closedAt);
-    const render = (item: Incident) => `• ${item.id} · ${item.key} · ${item.closedAt ? "pulih pada pemeriksaan" : item.state === "fault" ? "terganggu" : "belum terukur"} · ${operatorTime(item.closedAt ?? item.openedAt)}${!item.closedAt && item.acknowledgedAt ? " · sudah diakui" : ""}\n  ${item.detail}`;
-    return [
-      `Insiden NOC · ${open.length} terbuka`, ...open.slice(-20).reverse().map(render),
-      ...(open.length > 20 ? [`${open.length - 20} insiden terbuka lain tersimpan dalam riwayat.`] : []),
-      ...(closed.length ? ["Pemulihan terbaru", ...closed.slice(-5).reverse().map(render)] : []),
-      ...(!all.length ? ["Belum ada insiden tercatat."] : []),
-      "Gunakan /noc_ack NOC-1, /noc_escalate NOC-1, atau /noc_customer NOC-1.",
-    ].join("\n");
+    const render = (item: Incident) => {
+      const status = item.closedAt ? "Pulih" : item.state === "fault" ? "Terganggu" : "Belum terukur";
+      return [
+        `**${item.id}** · ${telegramLiteral(item.key)}`,
+        `${status} · ${telegramTime(item.closedAt ?? item.openedAt)}${!item.closedAt && item.acknowledgedAt ? " · sudah diakui" : ""}`,
+        telegramLiteral(item.detail),
+      ].join("\n");
+    };
+    const sections = [`**Insiden NOC**\n${open.length} terbuka`];
+    if (open.length) sections.push(...open.slice(-20).reverse().map(render));
+    if (open.length > 20) sections.push(`${open.length - 20} insiden terbuka lain tersimpan dalam riwayat.`);
+    if (closed.length) sections.push(["**Pemulihan terbaru**", ...closed.slice(-5).reverse().map(render)].join("\n\n"));
+    if (!all.length) sections.push("Belum ada insiden tercatat.");
+    if (open.length) sections.push("Contoh tindak lanjut: /noc_ack NOC-1 atau /noc_escalate NOC-1. Gunakan ID dari daftar.");
+    return sections.join("\n\n");
   }
 
   async #ack(ref: string): Promise<string> {
@@ -238,7 +247,7 @@ export class NocOperations {
         this.#needsWrite = this.#urgentWrite = true;
       }
       if (this.#urgentWrite) await this.#save();
-      reply = `${ref} diakui pada ${operatorTime(incident.acknowledgedAt)}. Insiden tetap terbuka sampai pemeriksaan pulih.`;
+      reply = `**${ref} sudah diakui**\n${telegramTime(incident.acknowledgedAt)}\n\nInsiden tetap terbuka sampai pemeriksaan pulih.`;
     });
     return reply;
   }
@@ -250,15 +259,14 @@ export class NocOperations {
       return "Pemeriksaan ini bersifat internal. Verifikasi dampak layanan sebelum menyiapkan pengumuman pelanggan.";
     }
     if (customer) return incident.closedAt
-      ? `Draf untuk pelanggan · ${ref}\n\nPemeriksaan kami kembali normal pada ${operatorTime(incident.closedAt)}. Kami tetap memantau kondisi layanan. Jika koneksi Anda masih bermasalah, silakan hubungi dukungan dan sertakan waktu kejadian.`
-      : `Draf untuk pelanggan · ${ref}\n\nKami sedang memeriksa indikasi gangguan yang terdeteksi sejak ${operatorTime(incident.openedAt)}. Cakupan dan penyebab sedang diverifikasi. Kami akan memberi kabar setelah ada hasil pemeriksaan.`;
+      ? `**Draf untuk pelanggan** · ${ref}\n\nPemeriksaan kami kembali normal pada ${telegramTime(incident.closedAt)}. Kami tetap memantau layanan.\n\nJika koneksi Anda masih bermasalah, hubungi dukungan dan sertakan waktu kejadian.`
+      : `**Draf untuk pelanggan** · ${ref}\n\nKami sedang memeriksa indikasi gangguan yang terdeteksi sejak ${telegramTime(incident.openedAt)}.\n\nKami masih memeriksa cakupan dan penyebabnya. Kami akan memberi kabar setelah ada hasil pemeriksaan.`;
     return [
-      `Draf eskalasi teknisi/ISP · ${ref}`,
-      `Pemeriksaan ${incident.key} pada ${this.options.routerIdentity}.`,
-      `Terdeteksi ${operatorTime(incident.openedAt)}. ${incident.closedAt ? `Pemeriksaan pulih ${operatorTime(incident.closedAt)}.` : "Insiden masih terbuka."}`,
-      `Bukti terakhir ${incident.detail}.`,
-      "Mohon cek dari sisi perangkat atau jalur terkait dan laporkan temuan, tindakan, dan waktu estimasi bila ada. Dampak pelanggan perlu diverifikasi.",
-    ].join("\n");
+      `**Draf eskalasi teknisi atau ISP** · ${ref}\n${telegramLiteral(incident.key)} · ${telegramLiteral(this.options.routerIdentity)}`,
+      `Terdeteksi ${telegramTime(incident.openedAt)}\n${incident.closedAt ? `Pemeriksaan pulih ${telegramTime(incident.closedAt)}` : "Insiden masih terbuka."}`,
+      `**Bukti terakhir**\n${telegramLiteral(incident.detail)}`,
+      "**Tindak lanjut**\nMohon periksa perangkat atau jalur terkait. Sertakan temuan, tindakan, dan estimasi pemulihan jika tersedia. Dampak pelanggan masih perlu diverifikasi.",
+    ].join("\n\n");
   }
 
   #report(from: string, to: string): string {
@@ -277,18 +285,34 @@ export class NocOperations {
       } else stats.set(key, { ...tally });
     }
     const capacity = [...stats].filter(([, tally]) => tally.over80 >= 3)
-      .map(([key, tally]) => `• Tinjau ${key}: ${tally.over80}/${tally.count} sampel ≥80% kapasitas terdaftar.`);
+      .slice(0, 16).map(([key, tally]) => `• ${telegramLiteral(key)} · ${tally.over80}/${tally.count} sampel ≥80% kapasitas tercatat`);
     const events = this.#state.events.filter((item) => within(item.at));
-    return [
-      `Laporan NOC · ${this.options.routerIdentity} · ${from === to ? from : `${from} s.d. ${to}`} (WIB)`,
-      `${samples} sampel, ${incidents.filter((item) => within(item.openedAt)).length} insiden dibuka, ${incidents.filter((item) => item.closedAt && within(item.closedAt)).length} pulih, ${events.length} catatan log/perubahan tersimpan.`,
-      ...[...stats].slice(0, 36).map(([key, t]) => `• ${key}: rata-rata ${(t.sum / t.count).toFixed(2)} ${t.unit}, puncak sampel ${t.peak.toFixed(2)} ${t.unit}, n=${t.count}`),
-      ...(stats.size > 36 ? [`${stats.size - 36} metrik lain tersimpan dalam ringkasan lokal.`] : []),
-      ...capacity.slice(0, 16),
-      ...events.slice(-5).map((item) => `• ${operatorTime(item.at)} · ${item.detail}`),
-      ...(!samples ? ["Belum ada sampel di periode ini."] : []),
-      "Angka dihitung dari sampel yang tersedia. Trafik terukur dan kapasitas yang dicatat tidak mengukur throughput internet pelanggan atau SLA.",
-    ].join("\n");
+    const openCount = incidents.filter((item) => within(item.openedAt)).length;
+    const recoveredCount = incidents.filter((item) => item.closedAt && within(item.closedAt)).length;
+    const sections = [
+      `**Laporan NOC**\n${telegramLiteral(this.options.routerIdentity)} · ${from === to ? from : `${from} s.d. ${to}`} (WIB)`,
+      `**Ringkasan**\n${samples} sampel · ${openCount} insiden baru · ${recoveredCount} pulih`,
+    ];
+    const selected = [...stats].slice(0, 36);
+    for (const [label, items] of [
+      ["Performa router", selected.filter(([key]) => /^(CPU|RAM) MikroTik$/.test(key))],
+      ["Koneksi perangkat", selected.filter(([key]) => key.startsWith("Perangkat "))],
+      ["Trafik dan pemakaian kapasitas", selected.filter(([key]) => !/^(Perangkat |(CPU|RAM) MikroTik$)/.test(key))],
+    ] as const) {
+      if (items.length) sections.push([`**${label}**`, ...items.map(([key, t]) =>
+        `• ${telegramLiteral(key)}\n  Rata-rata ${(t.sum / t.count).toFixed(2)} ${t.unit} · puncak ${t.peak.toFixed(2)} ${t.unit} · ${t.count} sampel`,
+      )].join("\n"));
+    }
+    if (capacity.length) sections.push(["**Kapasitas perlu ditinjau**", ...capacity].join("\n"));
+    if (events.length) sections.push([
+      `**Catatan terakhir** · ${events.length} tersimpan`,
+      ...events.slice(-5).map((item) => `• ${telegramTime(item.at)} · ${telegramLiteral(item.detail)}`),
+    ].join("\n"));
+    if (stats.size > selected.length) sections.push(`${stats.size - selected.length} metrik lain tersimpan dalam ringkasan lokal.`);
+    if (!samples) sections.push("Belum ada sampel di periode ini.");
+    else if (!stats.size) sections.push("Belum ada metrik yang berhasil dibaca pada periode ini.");
+    else sections.push("Rata-rata dan puncak dihitung dari sampel yang tersedia. Trafik ini belum mengukur throughput internet pelanggan atau SLA.");
+    return sections.join("\n\n");
   }
 }
 

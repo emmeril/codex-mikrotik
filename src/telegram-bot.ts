@@ -1,12 +1,14 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   InlineKeyboardMarkup,
+  TelegramBotCommand,
   TelegramCallbackQuery,
   TelegramMessage,
   TelegramMessageEntity,
+  TelegramText,
   TelegramUpdate,
 } from "./telegram-api.js";
-import { splitTelegramText, TelegramApi } from "./telegram-api.js";
+import { sendTelegramText, TelegramApi, telegramLiteral } from "./telegram-api.js";
 import type {
   ChangeExecutionResult,
   PendingChangePlan,
@@ -14,30 +16,38 @@ import type {
   TelegramAgentService,
 } from "./telegram-agent.js";
 
-const helpText = `Kirim pertanyaan biasa tentang MikroTik, misalnya:
+const helpIntro = `**Bantuan MikroTik**
+Tulis pertanyaan seperti “Kenapa ISP-2 sering putus?” atau “Cek pemakaian bandwidth saat ini.”`;
 
-• Cek versi RouterOS dan resource router
-• Interface mana yang sedang down?
-• Tampilkan DHCP lease aktif
-• Periksa firewall yang disabled
-• Tambahkan address 10.10.10.1/24 ke ether3
+const CHAT_COMMANDS = {
+  "/start": "Mulai menggunakan bot",
+  "/help": "Buka bantuan",
+  "/new": "Mulai percakapan baru",
+  "/whoami": "Lihat ID Telegram dan chat",
+} as const;
 
-Perubahan konfigurasi selalu ditampilkan dulu dan hanya berjalan setelah tombol konfirmasi ditekan.
-
-Perintah:
-/new - mulai percakapan baru
-/whoami - tampilkan Telegram user ID
-/help - bantuan`;
+const helpChat = [
+  "**Percakapan dan akses**",
+  ...Object.entries(CHAT_COMMANDS).map(([name, description]) => `${name} · ${description}`),
+  "",
+  "Periksa rencana perubahan sebelum menekan **Jalankan**.",
+].join("\n");
 
 const NOC_COMMANDS = {
-  "/noc": "pembacaan terakhir",
-  "/noc_inventory": "daftar perangkat dan topologi",
-  "/noc_incidents": "insiden terbuka dan pemulihan",
-  "/noc_ack": "akui insiden (contoh /noc_ack NOC-1)",
-  "/noc_report": "laporan hari ini atau /noc_report 7",
-  "/noc_escalate": "draf eskalasi (sertakan ID insiden)",
-  "/noc_customer": "draf pemberitahuan pelanggan (sertakan ID insiden)",
+  "/noc": "Status dari sampel terakhir",
+  "/noc_inventory": "Perangkat dan topologi",
+  "/noc_report": "Laporan hari ini. Tambahkan 7 untuk tujuh hari.",
+  "/noc_incidents": "Insiden terbuka dan pemulihan",
+  "/noc_ack": "Tandai insiden sudah diperiksa (sertakan ID)",
+  "/noc_escalate": "Buat draf untuk teknisi atau ISP (sertakan ID)",
+  "/noc_customer": "Buat draf pelanggan (sertakan ID)",
 } as const;
+
+export function nocTelegramMenuCommands(includeOperations = true): TelegramBotCommand[] {
+  const noc = Object.entries(NOC_COMMANDS).filter(([command]) => includeOperations || command === "/noc");
+  return [...noc, ...Object.entries(CHAT_COMMANDS)]
+    .map(([command, description]) => ({ command: command.slice(1), description }));
+}
 
 interface TelegramNoc {
   recipient: number;
@@ -48,6 +58,7 @@ interface TelegramNoc {
 
 interface TelegramBotApi {
   deleteWebhook(): Promise<void>;
+  setMyCommands?(chatId: number, commands: TelegramBotCommand[]): Promise<void>;
   getUpdates(offset: number, timeout: number): Promise<TelegramUpdate[]>;
   sendMessage(
     chatId: number,
@@ -90,6 +101,12 @@ export class TelegramBot {
 
   async run(signal: AbortSignal): Promise<void> {
     await this.#api.deleteWebhook();
+    if (this.#noc && this.#allowedUserIds.has(String(this.#noc.recipient)) && !signal.aborted) {
+      const commands = nocTelegramMenuCommands(Boolean(this.#noc.command));
+      void this.#api.setMyCommands?.(this.#noc.recipient, commands).catch(() => {
+        console.error("Telegram gagal memperbarui menu perintah NOC.");
+      });
+    }
     let offset = 0;
 
     while (!signal.aborted) {
@@ -140,11 +157,17 @@ export class TelegramBot {
 
     const command = commandName(text);
     if (command === "/start" || command === "/help") {
-      const nocHelp = this.#canViewNoc(message)
-        ? Object.entries(NOC_COMMANDS).filter(([name]) => name === "/noc" || this.#noc?.command)
-          .map(([name, purpose]) => `\n${name} - ${purpose}`).join("")
-        : "";
-      await this.#sendText(message.chat.id, helpText + nocHelp);
+      const sections = [helpIntro];
+      if (this.#canViewNoc(message)) {
+        const lines = (names: (keyof typeof NOC_COMMANDS)[]) =>
+          names.map((name) => `${name} · ${NOC_COMMANDS[name]}`);
+        sections.push(["**Cek dan laporan**", ...lines(this.#noc?.command ? ["/noc", "/noc_inventory", "/noc_report"] : ["/noc"])].join("\n"));
+        if (this.#noc?.command) sections.push([
+          "**Kelola insiden**", ...lines(["/noc_incidents", "/noc_ack", "/noc_escalate", "/noc_customer"]),
+          "Tambahkan ID insiden pada perintah akuan atau draf, misalnya /noc_ack NOC-1.",
+        ].join("\n"));
+      }
+      await this.#sendText(message.chat.id, [...sections, helpChat].join("\n\n"));
       return;
     }
     if (command && Object.hasOwn(NOC_COMMANDS, command)) {
@@ -182,7 +205,7 @@ export class TelegramBot {
     } catch (error) {
       outcome = "error";
       const detail = error instanceof Error ? error.message : String(error);
-      await this.#sendText(message.chat.id, `Permintaan gagal: ${detail}`);
+      await this.#sendText(message.chat.id, `**Permintaan gagal**\n${telegramLiteral(detail)}`);
     } finally {
       clearInterval(typingTimer);
       console.error(`Telegram request outcome=${outcome} duration_ms=${Date.now() - startedAt}`);
@@ -221,7 +244,7 @@ export class TelegramBot {
       await this.#api.answerCallbackQuery(query.id, callbackStatus(result, "Perubahan dibatalkan."), !result.ok);
       if (result.ok) {
         await this.#api.clearInlineKeyboard(message.chat.id, message.message_id).catch(() => undefined);
-        await this.#sendText(message.chat.id, `Dibatalkan: ${result.plan.summary}`);
+        await this.#sendText(message.chat.id, `**Perubahan dibatalkan**\n${telegramLiteral(result.plan.summary)}`);
       }
       return;
     }
@@ -239,6 +262,8 @@ export class TelegramBot {
     const operations = plan.operations.map((operation, index) =>
       `${index + 1}. ${operation.command}\n${JSON.stringify(operation.attributes, null, 2)}`
     ).join("\n\n");
+    const title = "Tinjau perubahan";
+    const intro = `${title}\n${plan.summary}\n\n`;
     const keyboard: InlineKeyboardMarkup = {
       inline_keyboard: [[
         { text: "Jalankan", callback_data: `confirm:${plan.id}` },
@@ -247,27 +272,23 @@ export class TelegramBot {
     };
     await this.#sendText(
       plan.chatId,
-      `MENUNGGU KONFIRMASI\n\n${plan.summary}\n\n${operations}\n\nBerlaku ${seconds} detik. Periksa command dan attribute sebelum menjalankan.`,
+      {
+        text: `${intro}${operations}\n\nBerlaku ${seconds} detik. Pilih Jalankan jika perintah dan atribut sudah sesuai.`,
+        entities: [
+          { type: "bold", offset: 0, length: title.length },
+          { type: "pre", offset: intro.length, length: operations.length },
+        ],
+      },
       keyboard,
     );
   }
 
   async #sendText(
     chatId: number,
-    text: string,
+    text: string | TelegramText,
     replyMarkup?: InlineKeyboardMarkup,
   ): Promise<void> {
-    const chunks = splitTelegramText(text);
-    for (const [index, chunk] of chunks.entries()) {
-      const isLast = index === chunks.length - 1;
-      const formatted = formatTelegramText(chunk);
-      await this.#api.sendMessage(
-        chatId,
-        formatted.text,
-        isLast ? replyMarkup : undefined,
-        formatted.entities,
-      );
-    }
+    await sendTelegramText(this.#api, chatId, text, replyMarkup);
   }
 
   #enqueue(update: TelegramUpdate): Promise<void> {
@@ -292,28 +313,7 @@ export function createTelegramApi(token: string): TelegramApi {
   return new TelegramApi(token);
 }
 
-export function formatTelegramText(text: string): {
-  text: string;
-  entities: TelegramMessageEntity[];
-} {
-  const entities: TelegramMessageEntity[] = [];
-  const pattern = /\*\*([^\n]+?)\*\*/g;
-  let formatted = "";
-  let cursor = 0;
-
-  for (const match of text.matchAll(pattern)) {
-    const content = match[1];
-    if (match.index === undefined || content === undefined || !content.trim()) continue;
-    formatted += text.slice(cursor, match.index);
-    const offset = formatted.length;
-    formatted += content;
-    entities.push({ type: "bold", offset, length: content.length });
-    cursor = match.index + match[0].length;
-  }
-
-  formatted += text.slice(cursor);
-  return { text: formatted, entities };
-}
+export { formatTelegramText } from "./telegram-api.js";
 
 function commandName(text: string): string | undefined {
   const first = text.split(/\s+/, 1)[0]?.toLowerCase();
@@ -329,11 +329,12 @@ function callbackStatus(result: PendingLookup, success: string): string {
 
 function formatExecutionResult(result: ChangeExecutionResult): string {
   if (result.ok && result.plan) {
-    return `BERHASIL\n${result.plan.summary}\n${result.completed} operasi selesai.`;
+    return `**Perintah berhasil dijalankan**\n${telegramLiteral(result.plan.summary)}\n\n${result.completed} operasi selesai.\nPeriksa kembali status yang ingin diperbaiki.`;
   }
-  if (result.reason === "expired") return "GAGAL\nKonfirmasi sudah kedaluwarsa. Minta bot menyiapkan perubahan lagi.";
-  if (result.reason === "forbidden") return "GAGAL\nKonfirmasi ini milik pengguna atau chat lain.";
-  if (result.reason === "not_found") return "GAGAL\nKonfirmasi tidak ditemukan atau sudah pernah dipakai.";
-  const summary = result.plan?.summary ?? "Perubahan konfigurasi";
-  return `GAGAL\n${summary}\n${result.completed} operasi sudah selesai sebelum kegagalan. Operasi berikutnya dihentikan.\nError: ${result.error ?? "tidak diketahui"}`;
+  if (result.reason === "expired") return "**Konfirmasi kedaluwarsa**\nMinta bot menyiapkan perubahan lagi.";
+  if (result.reason === "forbidden") return "**Konfirmasi ditolak**\nKonfirmasi ini terikat ke pengguna atau chat lain.";
+  if (result.reason === "not_found") return "**Konfirmasi tidak tersedia**\nKonfirmasi tidak ditemukan atau sudah pernah dipakai.";
+  const summary = telegramLiteral(result.plan?.summary ?? "Perubahan konfigurasi");
+  const error = telegramLiteral(result.error ?? "Penyebab belum diketahui.");
+  return `**Perubahan dihentikan**\n${summary}\n\n${result.completed} operasi selesai sebelum kegagalan.\n${error}\n\nPeriksa kondisi router sebelum mencoba lagi.`;
 }

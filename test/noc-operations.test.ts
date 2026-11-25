@@ -9,6 +9,7 @@ import { loadNocInventory } from "../src/noc-inventory.js";
 import { measureNoc, parseIcmpProbe } from "../src/noc-measurements.js";
 import { NocMonitor } from "../src/noc-monitor.js";
 import { NocOperations } from "../src/noc-operations.js";
+import { formatTelegramText } from "../src/telegram-api.js";
 
 async function temporary(t: TestContext): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "noc-ops-test-"));
@@ -73,6 +74,10 @@ test("daily report uses the previous WIB day and keeps its delivery marker acros
   assert.equal(notices.length, 1);
   assert.match(notices[0]!, /2026-11-25 \(WIB\)/);
   assert.match(notices[0]!, /3\/3 sampel ≥80% kapasitas/);
+  const formatted = formatTelegramText(notices[0]!);
+  const headings = formatted.entities.map(({ offset, length }) => formatted.text.slice(offset, offset + length));
+  assert.deepEqual(headings, ["Laporan NOC", "Ringkasan", "Trafik dan pemakaian kapasitas", "Kapasitas perlu ditinjau"]);
+  assert.doesNotMatch(formatted.text, /\*\*/);
   await new NocOperations(options).observe({ observedAt: "2026-11-26T02:00:00Z", readings: [] }, []);
   assert.equal(notices.length, 1);
 });

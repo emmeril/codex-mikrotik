@@ -34,9 +34,19 @@ export interface InlineKeyboardMarkup {
 }
 
 export interface TelegramMessageEntity {
-  type: "bold";
+  type: "bold" | "code" | "pre";
   offset: number;
   length: number;
+}
+
+export interface TelegramText {
+  text: string;
+  entities: TelegramMessageEntity[];
+}
+
+export interface TelegramBotCommand {
+  command: string;
+  description: string;
 }
 
 interface TelegramResponse<T> {
@@ -54,6 +64,14 @@ export class TelegramApi {
 
   async deleteWebhook(): Promise<void> {
     await this.#call("deleteWebhook", { drop_pending_updates: false });
+  }
+
+  async setMyCommands(chatId: number, commands: TelegramBotCommand[]): Promise<void> {
+    await this.#call("setMyCommands", { scope: { type: "chat", chat_id: chatId }, commands });
+  }
+
+  async getMyCommands(chatId: number): Promise<TelegramBotCommand[]> {
+    return this.#call("getMyCommands", { scope: { type: "chat", chat_id: chatId } });
   }
 
   async getUpdates(offset: number, timeout: number): Promise<TelegramUpdate[]> {
@@ -121,24 +139,86 @@ export class TelegramApi {
   }
 }
 
-export function splitTelegramText(text: string, maximum = 4_000): string[] {
-  if (text.length <= maximum) return [text];
-  const chunks: string[] = [];
-  let remaining = text;
+export function telegramLiteral(value: string): string {
+  return value.replace(/[\\*`]/g, "\\$&");
+}
 
-  while (remaining.length > maximum) {
-    const candidate = remaining.slice(0, maximum + 1);
-    const newline = candidate.lastIndexOf("\n");
-    const space = candidate.lastIndexOf(" ");
-    const splitAt = newline > maximum / 2
-      ? newline
-      : space > maximum / 2
-        ? space
-        : maximum;
-    chunks.push(remaining.slice(0, splitAt).trimEnd());
-    remaining = remaining.slice(splitAt).trimStart();
+export function formatTelegramText(text: string): TelegramText {
+  const result: TelegramText = { text: "", entities: [] };
+  const pattern = /^```[\w+-]*[ \t]*\r?\n([\s\S]*?)^```[ \t]*(?=\r?$)|\\([\\*`])|\*\*((?:\\[\\*`]|[^*\\\r\n]|\*(?!\*))+?)\*\*|(?<!`)`([^`\r\n]+)`(?!`)/gm;
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    const [raw, block, escaped, bold, code] = match;
+    result.text += text.slice(cursor, match.index);
+    if (escaped !== undefined) {
+      result.text += escaped;
+    } else {
+      const content = block?.replace(/\r?\n$/, "") ?? bold?.replace(/\\([\\*`])/g, "$1") ?? code;
+      if (!content?.trim()) {
+        result.text += raw;
+      } else {
+        const type = block !== undefined ? "pre" : bold !== undefined ? "bold" : "code";
+        result.entities.push({ type, offset: result.text.length, length: content.length });
+        result.text += content;
+      }
+    }
+    cursor = match.index + raw.length;
   }
+  return { text: result.text + text.slice(cursor), entities: result.entities };
+}
 
-  if (remaining) chunks.push(remaining);
-  return chunks;
+export function splitTelegramText(text: string, maximum = 4_000): string[] {
+  return textRanges(text, maximum).map(([start, end]) => text.slice(start, end));
+}
+
+export function splitFormattedTelegramText(message: TelegramText, maximum = 4_000): TelegramText[] {
+  return textRanges(message.text, maximum).map(([start, end]) => ({
+    text: message.text.slice(start, end),
+    entities: message.entities.flatMap((entity) => {
+      const left = Math.max(start, entity.offset);
+      const right = Math.min(end, entity.offset + entity.length);
+      return left < right ? [{ ...entity, offset: left - start, length: right - left }] : [];
+    }),
+  }));
+}
+
+export async function sendTelegramText(
+  api: Pick<TelegramApi, "sendMessage">,
+  chatId: number,
+  message: string | TelegramText,
+  replyMarkup?: InlineKeyboardMarkup,
+): Promise<void> {
+  const formatted = typeof message === "string" ? formatTelegramText(message) : message;
+  const chunks = splitFormattedTelegramText(formatted).filter((chunk) => chunk.text.trim());
+  for (const [index, chunk] of chunks.entries()) {
+    await api.sendMessage(chatId, chunk.text, index === chunks.length - 1 ? replyMarkup : undefined, chunk.entities);
+  }
+}
+
+function textRanges(text: string, maximum: number): [number, number][] {
+  if (!Number.isInteger(maximum) || maximum < 2) throw new Error("Batas pesan Telegram tidak valid");
+  const ranges: [number, number][] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + maximum, text.length);
+    if (end < text.length) {
+      const segment = text.slice(start, end);
+      const breaks = [segment.lastIndexOf("\n\n") + 2, segment.lastIndexOf("\n") + 1, segment.lastIndexOf(" ") + 1];
+      const preferred = breaks.find((point) => point > maximum / 2);
+      if (preferred) end = start + preferred;
+      if (text.charCodeAt(end) >= 0xdc00 && text.charCodeAt(end) <= 0xdfff
+        && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--;
+    }
+    ranges.push([start, end]);
+    start = end;
+  }
+  return ranges;
+}
+
+const wibClock = new Intl.DateTimeFormat("id-ID", {
+  dateStyle: "medium", timeStyle: "medium", timeZone: "Asia/Jakarta",
+});
+
+export function telegramTime(iso: string): string {
+  return wibClock.format(new Date(iso)) + " WIB";
 }

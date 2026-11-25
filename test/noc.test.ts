@@ -49,7 +49,7 @@ test("NOC debounces incidents and recovery, retries alerts, and skips recovery o
   await sample(api, noLink);
   assert.equal(diagnoseCalls, 1);
   assert.equal(sent.length, 2);
-  assert.match(sent[0]!, /Ethernet ISP-1 \[TERGANGGU\]/);
+  assert.match(sent[0]!, /\*\*Gangguan\*\*\n• Ethernet ISP-1/);
   assert.match(sent[1]!, /Periksa kabel/);
 
   await sample(api, link);
@@ -60,7 +60,7 @@ test("NOC debounces incidents and recovery, retries alerts, and skips recovery o
   assert.equal(sent.length, 2);
   await sample(api, link);
   assert.equal(sent.length, 3);
-  assert.match(sent[2]!, /Ethernet ISP-1 \[OK\]/);
+  assert.match(sent[2]!, /\*\*Pulih\*\*\n• Ethernet ISP-1/);
 });
 
 test("NOC verifies the recipient is allowlisted before loading any monitor configuration", (context) => {
@@ -114,8 +114,8 @@ test("NOC delivers both the outage and recovery after Telegram connectivity retu
   await monitor.poll(signal);
 
   assert.equal(sent.length, 2);
-  assert.match(sent[0]!, /API router \[BELUM TERUKUR\]/);
-  assert.match(sent[1]!, /API router \[OK\]/);
+  assert.match(sent[0]!, /\*\*Belum terukur\*\*\n• API router/);
+  assert.match(sent[1]!, /\*\*Pulih\*\*\n• API router/);
   assert.equal(diagnoses, 0);
 });
 
