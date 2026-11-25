@@ -4,6 +4,8 @@ import { CodexCliRunner, CodexTelegramAgent } from "./telegram-agent.js";
 import { createTelegramApi, TelegramBot } from "./telegram-bot.js";
 import { loadTelegramAgentConfig } from "./telegram-config.js";
 import { loadConfig } from "./config.js";
+import { NocMonitor, readNocSnapshot } from "./noc-monitor.js";
+import { splitTelegramText } from "./telegram-api.js";
 
 async function main(): Promise<void> {
   const config = loadTelegramAgentConfig();
@@ -30,12 +32,23 @@ async function main(): Promise<void> {
     writeEnabled: routerConfig.writeEnabled,
     pendingChangeTtlMs: config.pendingChangeTtlMs,
   });
+  const api = createTelegramApi(config.botToken);
+  const nocConfig = config.noc;
+  const noc = nocConfig && new NocMonitor({
+    config: nocConfig,
+    read: () => readNocSnapshot(routerConfig, nocConfig),
+    notify: async (message) => {
+      for (const chunk of splitTelegramText(message)) await api.sendMessage(nocConfig.recipient, chunk);
+    },
+    diagnose: (snapshot) => agent.diagnoseNocIncident(nocConfig.expectedIdentity, snapshot),
+  });
   const bot = new TelegramBot({
-    api: createTelegramApi(config.botToken),
+    api,
     agent,
     allowedUserIds: config.allowedUserIds,
     privateOnly: config.privateOnly,
     pollTimeoutSeconds: config.pollTimeoutSeconds,
+    ...(nocConfig && noc ? { noc: { recipient: nocConfig.recipient, status: () => noc.status() } } : {}),
   });
 
   const controller = new AbortController();
@@ -44,8 +57,9 @@ async function main(): Promise<void> {
 
   console.error(`MikroTik Telegram agent ready (Codex ${config.codexTransport})`);
   try {
-    await bot.run(controller.signal);
+    await Promise.all([bot.run(controller.signal), noc?.run(controller.signal)]);
   } finally {
+    controller.abort();
     await runner.close?.();
   }
 }

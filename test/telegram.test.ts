@@ -178,6 +178,52 @@ test("agent keeps the Codex thread per Telegram chat", async () => {
   assert.equal(runner.threadIds[2], undefined);
 });
 
+test("automatic NOC diagnosis rejects changes even when Telegram writes are enabled", async () => {
+  const pending = new PendingChangeStore(60_000);
+  const create = test.mock.method(pending, "create");
+  try {
+    const agent = new CodexTelegramAgent({
+      runner: {
+        run: async (_prompt, threadId) => {
+          assert.equal(threadId, undefined);
+          return {
+            threadId: "noc",
+            finalResponse: JSON.stringify({
+              message: "Rencana perubahan",
+              changes: [{ summary: "Disable interface", operations: [{ command: "/interface/disable", attributes: [] }] }],
+            }),
+          };
+        },
+      },
+      writeEnabled: true,
+      pendingChangeTtlMs: 60_000,
+      pendingStore: pending,
+    });
+    await assert.rejects(agent.diagnoseNocIncident("Ro-Test", {
+      observedAt: "2026-01-01T00:00:00Z", readings: [],
+    }), /hanya membaca/);
+    assert.equal(create.mock.callCount(), 0);
+  } finally {
+    create.mock.restore();
+  }
+});
+
+test("NOC status only appears in the configured recipient's private chat", async () => {
+  const api = new FakeTelegramApi();
+  const agent = new FakeAgent();
+  const bot = new TelegramBot({
+    api, agent, allowedUserIds: new Set(["42", "43"]), privateOnly: false,
+    pollTimeoutSeconds: 1, noc: { recipient: 42, status: () => "Sampel NOC" },
+  });
+  await bot.handleUpdate({ update_id: 1, message: message(-10, 42, "group", "/noc") });
+  await bot.handleUpdate({ update_id: 2, message: message(43, 43, "private", "/noc") });
+  await bot.handleUpdate({ update_id: 3, message: message(42, 42, "private", "/noc") });
+  assert.match(api.sent[0]!.text, /tidak tersedia/);
+  assert.match(api.sent[1]!.text, /tidak tersedia/);
+  assert.equal(api.sent[2]!.text, "Sampel NOC");
+  assert.equal(agent.replyCalls, 0);
+});
+
 function message(
   chatId: number,
   userId: number,

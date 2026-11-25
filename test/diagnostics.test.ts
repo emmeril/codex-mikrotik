@@ -3,6 +3,8 @@ import { createServer, type Socket } from "node:net";
 import test, { type TestContext } from "node:test";
 import { monitorEthernet, monitorTraffic, pingRouter } from "../src/diagnostics.js";
 import type { RouterOsConfig } from "../src/config.js";
+import { readNocSnapshot } from "../src/noc-monitor.js";
+import type { NocConfig } from "../src/telegram-config.js";
 import { encodeSentence, SentenceReader } from "../src/protocol.js";
 import { runReadCommand } from "../src/tools.js";
 
@@ -120,21 +122,77 @@ test("generic read query still rejects monitors, writes, sensitive paths and str
   }
 });
 
+const nocConfig: NocConfig = {
+  expectedIdentity: "Ro-Test", recipient: 123, interfaces: ["ISP-1"],
+  routeTables: ["main", "wan"], intervalMs: 30_000, consecutiveSamples: 3,
+};
+
+test("NOC separates an Ethernet read failure from active and discard default routes", async (context) => {
+  const config = await router(context, [
+    { command: "/system/identity/print", reply: [["!re", "=name=Ro-Test"]] },
+    { command: "/system/resource/print", reply: [["!re", "=version=6.49.23 (stable)"]] },
+  ], [
+    settings(),
+    { command: "/interface/ethernet/monitor", includes: ["=once=yes"], reply: [["!trap", "=message=not enough permissions"]] },
+  ], [
+    { command: "/ip/route/print", includes: ["?dst-address=0.0.0.0/0"], reply: [
+      ["!re", "=dst-address=0.0.0.0/0", "=active=true", "=gateway=192.0.2.1"],
+      ["!re", "=dst-address=0.0.0.0/0", "=routing-mark=wan", "=active=true", "=type=blackhole"],
+    ] },
+  ]);
+  const { readings } = await readNocSnapshot(config, nocConfig);
+  assert.deepEqual(readings.map(({ key, state }) => [key, state]), [
+    ["API router", "ok"], ["Ethernet ISP-1", "unknown"], ["Default IPv4 main", "ok"], ["Default IPv4 wan", "fault"],
+  ]);
+  assert.match(readings[1]?.detail ?? "", /izin/);
+  assert.match(readings[3]?.detail ?? "", /discard/);
+});
+
+test("NOC stops at an unexpected router identity", async (context) => {
+  const config = await router(context, [
+    { command: "/system/identity/print", reply: [["!re", "=name=Unrelated router"]] },
+  ]);
+  const { readings } = await readNocSnapshot(config, nocConfig);
+  assert.equal(readings.length, 1);
+  assert.equal(readings[0]?.state, "unknown");
+  assert.match(readings[0]?.detail ?? "", /Identitas/);
+});
+
+test("NOC distinguishes a capped RouterOS 7 route read from an absent active route", async (context) => {
+  const config = await router(context, [
+    { command: "/system/identity/print", reply: [["!re", "=name=Ro-Test"]] },
+    { command: "/system/resource/print", reply: [["!re", "=version=7.19.2 (stable)"]] },
+  ], [
+    settings(),
+    { command: "/interface/ethernet/monitor", reply: [["!re", "=status=no-link"]] },
+  ], [
+    { command: "/ip/route/print", reply: [
+      ["!re", "=dst-address=0.0.0.0/0", "=routing-table=main", "=active=true", "=gateway=192.0.2.1"],
+      ["!re", "=dst-address=0.0.0.0/0", "=routing-table=wan", "=active=true", "=gateway=192.0.2.2"],
+    ] },
+  ]);
+  const { readings } = await readNocSnapshot({ ...config, maxRows: 1 }, nocConfig);
+  assert.deepEqual(readings.map(({ state }) => state), ["ok", "fault", "ok", "unknown"]);
+});
+
 function settings(): Exchange {
   return { command: "/interface/ethernet/print", includes: ["?name=ISP-1"], reply: [
     ["!re", "=.id=*1", "=name=ISP-1", "=speed=100Mbps", "=auto-negotiation=true", "=full-duplex=false"],
   ] };
 }
 
-async function router(context: TestContext, exchanges: Exchange[]): Promise<RouterOsConfig> {
+async function router(context: TestContext, ...sessions: Exchange[][]): Promise<RouterOsConfig> {
   const failures: unknown[] = [];
   const sockets = new Set<Socket>();
   let completed = 0;
+  let session = 0;
   const server = createServer((socket) => {
+    const exchanges = sessions[session++];
     sockets.add(socket);
     socket.on("error", () => undefined);
     socket.on("close", () => sockets.delete(socket));
     void (async () => {
+      assert.ok(exchanges, "unexpected connection to mock router");
       const reader = new SentenceReader(socket);
       assert.equal((await reader.readSentence())[0], "/login");
       socket.write(encodeSentence(["!done"]));
@@ -153,7 +211,8 @@ async function router(context: TestContext, exchanges: Exchange[]): Promise<Rout
     for (const socket of sockets) socket.destroy();
     server.close();
     assert.deepEqual(failures, []);
-    assert.equal(completed, exchanges.length);
+    assert.equal(session, sessions.length);
+    assert.equal(completed, sessions.flat().length);
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing test port");

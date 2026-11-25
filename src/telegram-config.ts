@@ -1,3 +1,12 @@
+export interface NocConfig {
+  recipient: number;
+  expectedIdentity: string;
+  interfaces: string[];
+  routeTables: string[];
+  intervalMs: number;
+  consecutiveSamples: number;
+}
+
 export interface TelegramAgentConfig {
   botToken: string;
   allowedUserIds: Set<string>;
@@ -10,6 +19,7 @@ export interface TelegramAgentConfig {
   codexReasoningEffort?: string;
   codexServiceTier?: string;
   codexTimeoutMs: number;
+  noc?: NocConfig;
 }
 
 function required(name: string): string {
@@ -41,6 +51,36 @@ function integerValue(
   return value;
 }
 
+function nocNames(name: string, raw: string): string[] {
+  const names = raw.split(",").map((value) => value.trim());
+  if (names.length > 8 || new Set(names).size !== names.length
+    || names.some((value) => !value || value.length > 100 || value === "all" || /[\x00-\x1f\x7f]/.test(value))) {
+    throw new Error(`${name} harus berisi 1-8 nama spesifik yang berbeda`);
+  }
+  return names;
+}
+
+function loadNocConfig(allowedUserIds: ReadonlySet<string>): NocConfig | undefined {
+  if (!booleanValue("NOC_ENABLED", false)) return undefined;
+  const userId = required("NOC_TELEGRAM_USER_ID");
+  const recipient = Number(userId);
+  if (!/^[1-9]\d*$/.test(userId) || !Number.isSafeInteger(recipient) || !allowedUserIds.has(userId)) {
+    throw new Error("NOC_TELEGRAM_USER_ID harus berupa ID pengguna dalam TELEGRAM_ALLOWED_USER_IDS");
+  }
+  const expectedIdentity = required("NOC_EXPECTED_ROUTER");
+  if (expectedIdentity.length > 100 || /[\x00-\x1f\x7f]/.test(expectedIdentity)) {
+    throw new Error("NOC_EXPECTED_ROUTER harus berupa nama router yang valid");
+  }
+  return {
+    recipient,
+    expectedIdentity,
+    interfaces: nocNames("NOC_ETHERNET_INTERFACES", required("NOC_ETHERNET_INTERFACES")),
+    routeTables: nocNames("NOC_IPV4_ROUTE_TABLES", process.env.NOC_IPV4_ROUTE_TABLES?.trim() || "main"),
+    intervalMs: integerValue("NOC_INTERVAL_SECONDS", 30, 15, 600) * 1_000,
+    consecutiveSamples: integerValue("NOC_CONSECUTIVE_SAMPLES", 3, 2, 10),
+  };
+}
+
 export function loadTelegramAgentConfig(): TelegramAgentConfig {
   const botToken = required("TELEGRAM_BOT_TOKEN");
   if (!/^\d{5,20}:[A-Za-z0-9_-]{30,}$/.test(botToken)) {
@@ -64,6 +104,7 @@ export function loadTelegramAgentConfig(): TelegramAgentConfig {
     throw new Error("CODEX_TRANSPORT harus berupa app-server atau exec");
   }
 
+  const noc = loadNocConfig(allowedUserIds);
   return {
     botToken,
     allowedUserIds,
@@ -87,5 +128,6 @@ export function loadTelegramAgentConfig(): TelegramAgentConfig {
       ? { codexServiceTier: process.env.CODEX_SERVICE_TIER.trim() }
       : {}),
     codexTimeoutMs: integerValue("CODEX_TIMEOUT_SECONDS", 300, 30, 1_800) * 1_000,
+    ...(noc ? { noc } : {}),
   };
 }

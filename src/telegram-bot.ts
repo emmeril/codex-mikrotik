@@ -50,6 +50,7 @@ export class TelegramBot {
   readonly #privateOnly: boolean;
   readonly #pollTimeoutSeconds: number;
   readonly #typingRefreshMs: number;
+  readonly #noc: { recipient: number; status: () => string } | undefined;
   readonly #queues = new Map<string, Promise<void>>();
 
   constructor(options: {
@@ -59,6 +60,7 @@ export class TelegramBot {
     privateOnly: boolean;
     pollTimeoutSeconds: number;
     typingRefreshMs?: number;
+    noc?: { recipient: number; status: () => string };
   }) {
     this.#api = options.api;
     this.#agent = options.agent;
@@ -66,6 +68,7 @@ export class TelegramBot {
     this.#privateOnly = options.privateOnly;
     this.#pollTimeoutSeconds = options.pollTimeoutSeconds;
     this.#typingRefreshMs = options.typingRefreshMs ?? 4_000;
+    this.#noc = options.noc;
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -120,7 +123,13 @@ export class TelegramBot {
 
     const command = commandName(text);
     if (command === "/start" || command === "/help") {
-      await this.#sendText(message.chat.id, helpText);
+      const nocHelp = this.#canViewNoc(message) ? "\n/noc - tampilkan pembacaan terakhir NOC" : "";
+      await this.#sendText(message.chat.id, helpText + nocHelp);
+      return;
+    }
+    if (command === "/noc") {
+      const status = this.#canViewNoc(message) ? this.#noc?.status() : undefined;
+      await this.#sendText(message.chat.id, status ?? "Status NOC tidak tersedia di chat ini.");
       return;
     }
     if (command === "/new") {
@@ -150,6 +159,11 @@ export class TelegramBot {
       clearInterval(typingTimer);
       console.error(`Telegram request outcome=${outcome} duration_ms=${Date.now() - startedAt}`);
     }
+  }
+
+  #canViewNoc(message: TelegramMessage): boolean {
+    return this.#noc !== undefined && message.chat.type === "private"
+      && message.chat.id === this.#noc.recipient && message.from?.id === this.#noc.recipient;
   }
 
   async #handleCallback(query: TelegramCallbackQuery): Promise<void> {

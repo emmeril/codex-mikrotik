@@ -160,6 +160,12 @@ Dugaan: [penyebab yang perlu diuji, bila ada]
 Langkah berikutnya: [pemeriksaan terarah atau rencana perubahan]
 ```
 
+### Notifikasi NOC
+
+NOC mengambil sampel API, link Ethernet, dan rute default IPv4 dari proses Telegram. Pembacaan API memverifikasi identitas dan versi RouterOS sebelum membaca link dan rute. Gunakan status dari [monitor Ethernet](https://manual.mikrotik.com/docs/wired-connections/ethernet/) dan field tabel yang sesuai versi untuk [rute default](https://manual.mikrotik.com/docs/user-guides/routing-and-networking-protocols/routing-decision/). Jika pembacaan gagal atau datanya tidak cukup, statusnya belum terukur.
+
+Gunakan waktu sampel pada pesan untuk membedakan riwayat dari status terbaru. Notifikasi pemulihan berlaku untuk pemeriksaan tersebut. Diagnosis NOC bisa menindaklanjuti dengan pembacaan terarah, sementara perubahan melalui Telegram tetap mengikuti preview dan konfirmasi pengguna.
+
 ### Sebelum dan sesudah perubahan
 
 1. Verifikasi ulang target dan kondisi awal yang akan diubah. Gunakan `.id` atau nama yang sudah dicocokkan, bukan nomor urut tampilan `print` sebagai identitas tetap. Simpan nilai awal yang diperlukan untuk rollback tanpa menyalin secret.

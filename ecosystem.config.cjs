@@ -2,10 +2,10 @@ module.exports = {
   apps: [
     {
       name: "mikrotik-telegram",
-      cwd: "/root/codex-mikrotik",
+      cwd: __dirname,
       script: "dist/telegram.js",
       interpreter: "node",
-      node_args: ["--env-file=/root/codex-mikrotik/.env"],
+      node_args: ["--env-file=.env"],
       instances: 1,
       exec_mode: "fork",
       autorestart: true,
