@@ -118,3 +118,21 @@ test("NOC delivers both the outage and recovery after Telegram connectivity retu
   assert.match(sent[1]!, /API router \[OK\]/);
   assert.equal(diagnoses, 0);
 });
+
+test("NOC sends a log alert immediately without starting an AI diagnosis", async () => {
+  const sent: string[] = [];
+  let diagnoses = 0;
+  const monitor = new NocMonitor({
+    config: { ...config, logEnabled: true },
+    read: async () => ({
+      observedAt: "2026-01-01T00:00:00Z", readings: [api, link],
+      logAlerts: ["Ethernet ISP-1 mencatat link putus"],
+    }),
+    notify: async (message) => { sent.push(message); },
+    diagnose: async () => { diagnoses++; return "Unexpected diagnosis"; },
+  });
+  await monitor.poll(new AbortController().signal);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!, /Kejadian log[\s\S]*Ethernet ISP-1 mencatat link putus/);
+  assert.equal(diagnoses, 0);
+});

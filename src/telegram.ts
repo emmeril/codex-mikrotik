@@ -5,6 +5,7 @@ import { createTelegramApi, TelegramBot } from "./telegram-bot.js";
 import { loadTelegramAgentConfig } from "./telegram-config.js";
 import { loadConfig } from "./config.js";
 import { NocMonitor, readNocSnapshot } from "./noc-monitor.js";
+import { NocLogWatcher } from "./noc-logs.js";
 import { splitTelegramText } from "./telegram-api.js";
 
 async function main(): Promise<void> {
@@ -34,9 +35,14 @@ async function main(): Promise<void> {
   });
   const api = createTelegramApi(config.botToken);
   const nocConfig = config.noc;
+  const logWatcher = nocConfig?.logEnabled ? new NocLogWatcher({
+    interfaces: nocConfig.interfaces,
+    ...(nocConfig.wanSessionNames ? { wanSessionNames: nocConfig.wanSessionNames } : {}),
+    maxRows: routerConfig.maxRows,
+  }) : undefined;
   const noc = nocConfig && new NocMonitor({
     config: nocConfig,
-    read: () => readNocSnapshot(routerConfig, nocConfig),
+    read: () => readNocSnapshot(routerConfig, nocConfig, logWatcher),
     notify: async (message) => {
       for (const chunk of splitTelegramText(message)) await api.sendMessage(nocConfig.recipient, chunk);
     },

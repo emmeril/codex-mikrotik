@@ -11,6 +11,7 @@ export interface CommandOptions {
   queries?: string[];
   proplist?: string[];
   limit?: number;
+  replyBudget?: { maxRows: number; timeoutMs: number };
 }
 
 export class RouterOsError extends Error {
@@ -64,7 +65,7 @@ export class RouterOsClient {
       words.push(`=.proplist=${options.proplist.join(",")}`);
     }
     words.push(...(options.queries ?? []));
-    return (await this.exchange(words, options.limit)).rows;
+    return (await this.exchange(words, options.limit, options.replyBudget)).rows;
   }
 
   close(): void {
@@ -103,22 +104,27 @@ export class RouterOsClient {
     ]);
   }
 
-  private async exchange(words: string[], limit?: number): Promise<Reply> {
+  private async exchange(words: string[], limit?: number, budget?: CommandOptions["replyBudget"]): Promise<Reply> {
     if (!this.socket || !this.reader) throw new Error("Client belum terhubung");
     await write(this.socket, encodeSentence(words));
 
     const rows: RouterOsRecord[] = [];
     const rowLimit = Math.min(limit ?? this.config.maxRows, this.config.maxRows);
+    const deadline = budget ? performance.now() + budget.timeoutMs : Infinity;
+    let replies = 0;
     while (true) {
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new Error("Perintah RouterOS melewati batas waktu");
       const sentence = await withTimeout(
         this.reader.readSentence(),
-        this.config.commandTimeoutMs,
+        Math.min(this.config.commandTimeoutMs, remaining),
         "Perintah RouterOS melewati batas waktu",
       );
       const [type, ...parts] = sentence;
       const attributes = parseAttributes(parts);
       if (type === "!empty") continue;
       if (type === "!re") {
+        if (budget && ++replies > budget.maxRows) throw new Error("Balasan RouterOS melebihi batas baris");
         if (rows.length < rowLimit) rows.push(attributes);
         continue;
       }

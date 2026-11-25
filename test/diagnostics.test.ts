@@ -4,6 +4,7 @@ import test, { type TestContext } from "node:test";
 import { monitorEthernet, monitorTraffic, pingRouter } from "../src/diagnostics.js";
 import type { RouterOsConfig } from "../src/config.js";
 import { readNocSnapshot } from "../src/noc-monitor.js";
+import { NocLogWatcher } from "../src/noc-logs.js";
 import type { NocConfig } from "../src/telegram-config.js";
 import { encodeSentence, SentenceReader } from "../src/protocol.js";
 import { runReadCommand } from "../src/tools.js";
@@ -152,10 +153,35 @@ test("NOC stops at an unexpected router identity", async (context) => {
   const config = await router(context, [
     { command: "/system/identity/print", reply: [["!re", "=name=Unrelated router"]] },
   ]);
-  const { readings } = await readNocSnapshot(config, nocConfig);
+  const watcher = new NocLogWatcher({ interfaces: ["ISP-1"], maxRows: config.maxRows });
+  const { readings } = await readNocSnapshot(config, nocConfig, watcher);
   assert.equal(readings.length, 1);
   assert.equal(readings[0]?.state, "unknown");
   assert.match(readings[0]?.detail ?? "", /Identitas/);
+});
+
+test("NOC rejects an over-budget log reply without hiding other checks", async (context) => {
+  const config = await router(context, [
+    { command: "/system/identity/print", reply: [["!re", "=name=Ro-Test"]] },
+    { command: "/system/resource/print", reply: [["!re", "=version=6.49.23", "=uptime=1d"]] },
+    { command: "/system/logging/action/print", includes: ["?name=memory", "?target=memory"], reply: [
+      ["!re", "=memory-lines=1", "=memory-stop-on-full=false"],
+    ] },
+    { command: "/log/print", includes: ["?buffer=memory", "=.proplist=.id,topics"], reply: [
+      ["!re", "=.id=*1", "=topics=system,error"],
+      ["!re", "=.id=*2", "=topics=system,info"],
+    ] },
+  ], [
+    settings(),
+    { command: "/interface/ethernet/monitor", reply: [["!re", "=status=link-ok"]] },
+  ], [
+    { command: "/ip/route/print", reply: [["!re", "=dst-address=0.0.0.0/0", "=active=true", "=gateway=192.0.2.1"]] },
+  ]);
+  const watcher = new NocLogWatcher({ interfaces: ["ISP-1"], maxRows: config.maxRows });
+  const result = await readNocSnapshot(config, nocConfig, watcher);
+  assert.equal(result.readings.find(({ key }) => key === "Ethernet ISP-1")?.state, "ok");
+  assert.equal(result.readings.find(({ key }) => key === "Log MikroTik")?.state, "unknown");
+  assert.equal(result.logAlerts, undefined);
 });
 
 test("NOC distinguishes a capped RouterOS 7 route read from an absent active route", async (context) => {

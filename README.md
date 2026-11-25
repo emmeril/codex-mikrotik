@@ -216,7 +216,11 @@ NOC berjalan di proses bot Telegram. Set `NOC_ENABLED=true` pada konfigurasi lay
 
 Bot menunggu 30 detik antarsampel secara default. Setelah tiga sampel berurutan menunjukkan status berbeda, bot melaporkan gangguan, pembacaan yang belum berhasil, atau pemulihan pada pemeriksaan tersebut. Setelah memberi kabar, Codex dapat memeriksa gangguan link atau rute lebih lanjut dalam sesi diagnosis tersendiri. Pemantauan hanya membaca router. Untuk menerapkan perbaikan, minta perubahan lewat chat, tinjau preview, lalu tekan `Jalankan` jika operasi tulis aktif.
 
-`/noc` menunjukkan sampel terakhir beserta waktunya. Pemeriksaan ini mengamati API, status link fisik dan keberadaan rute default aktif dengan gateway, tanpa probe internet klien. Jika Telegram tidak terjangkau, bot menyimpan hingga 32 notifikasi di memori untuk dikirim saat koneksi kembali. Antrean notifikasi dan riwayat pembanding dimulai ulang saat proses bot dimulai ulang.
+`/noc` menunjukkan sampel terakhir beserta waktunya. Status API, link dan rute tidak menguji internet dari sisi klien. Jika Telegram tidak terjangkau, bot menyimpan hingga 32 notifikasi di memori untuk dikirim saat koneksi kembali. Antrean notifikasi dan riwayat pembanding dimulai ulang saat proses bot dimulai ulang.
+
+Saat NOC aktif, bot juga memeriksa buffer log `memory` MikroTik setiap sampel. Entri yang sudah ada saat bot mulai menjadi pembanding. Bot merangkum putusnya link terpantau, hilangnya lease DHCP client di port tersebut, putusnya sesi PPP/PPPoE WAN yang dikenal, reboot, dan minimal lima gagal login router yang baru terbaca dalam lima menit. Kejadian sejenis dirangkum paling sering sekali tiap lima menit. Ringkasan log tidak memanggil AI dan tidak menyertakan pesan asli, nama pengguna, atau alamat IP.
+
+Jika nama sesi PPP/PPPoE berbeda dari port fisik, atur `NOC_WAN_SESSION_NAMES` dengan daftar nama persis yang terlihat di log. Set `NOC_LOG_ENABLED=false` jika pemantauan log perlu dimatikan. Bot membaca maksimal 2.000 entri dan mengikuti batas `MIKROTIK_MAX_ROWS` jika lebih rendah. Buffer yang lebih besar atau berhenti menerima log saat penuh dilaporkan sebagai belum terukur. Entri yang sudah keluar dari buffer di antara dua pembacaan mungkin terlewat.
 
 ## Mengaktifkan perubahan konfigurasi
 

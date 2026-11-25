@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { RouterOsError, type RouterOsRecord } from "./client.js";
 import type { RouterOsConfig } from "./config.js";
 import { monitorEthernet } from "./diagnostics.js";
+import { NocLogReadError, type NocLogWatcher } from "./noc-logs.js";
 import type { NocConfig } from "./telegram-config.js";
 import { withClient } from "./tools.js";
 
@@ -14,10 +15,19 @@ interface NocReading {
 export interface NocSnapshot {
   observedAt: string;
   readings: NocReading[];
+  logAlerts?: string[];
 }
 
-export async function readNocSnapshot(router: RouterOsConfig, noc: NocConfig): Promise<NocSnapshot> {
+const LOG_CHECK = "Log MikroTik";
+
+export async function readNocSnapshot(
+  router: RouterOsConfig,
+  noc: NocConfig,
+  logWatcher?: NocLogWatcher,
+): Promise<NocSnapshot> {
   const readings: NocReading[] = [];
+  let logReading: NocReading | undefined;
+  let logAlerts: string[] = [];
   const addRouterReading = (state: NocReading["state"], detail: string) => {
     readings.push({ key: "API router", state, detail });
   };
@@ -26,9 +36,22 @@ export async function readNocSnapshot(router: RouterOsConfig, noc: NocConfig): P
       const [identity] = await client.command("/system/identity/print", { proplist: ["name"], limit: 1 });
       if (identity?.name !== noc.expectedIdentity) return null;
       const [resource] = await client.command("/system/resource/print", {
-        proplist: ["version"], limit: 1,
+        proplist: ["version", ...(logWatcher ? ["uptime"] : [])], limit: 1,
       });
-      return resource?.version?.match(/^[67]\.\d+(?:\.\d+)*/)?.[0];
+      const version = resource?.version?.match(/^[67]\.\d+(?:\.\d+)*/)?.[0];
+      if (version && logWatcher) {
+        try {
+          const sample = await logWatcher.sample(client, resource?.uptime);
+          logReading = { key: LOG_CHECK, state: "ok", detail: sample.detail };
+          logAlerts = sample.alerts;
+        } catch (error) {
+          logReading = {
+            key: LOG_CHECK, state: "unknown",
+            detail: error instanceof NocLogReadError ? error.message : readFailure(error),
+          };
+        }
+      }
+      return version;
     }, router);
     if (version === null) {
       addRouterReading("unknown", "Identitas belum cocok dengan target. Link dan rute tidak diperiksa.");
@@ -42,7 +65,8 @@ export async function readNocSnapshot(router: RouterOsConfig, noc: NocConfig): P
   } catch (error) {
     addRouterReading("unknown", readFailure(error));
   }
-  return { observedAt: new Date().toISOString(), readings };
+  if (logReading) readings.push(logReading);
+  return { observedAt: new Date().toISOString(), readings, ...(logAlerts.length ? { logAlerts } : {}) };
 }
 
 async function readEthernet(router: RouterOsConfig, name: string): Promise<NocReading> {
@@ -113,6 +137,8 @@ function readFailure(error: unknown): string {
   }
   if (/Interface Ethernet tidak ditemukan/.test(message)) return "tidak ada baris untuk nama Ethernet ini";
   if (/Monitor tidak mengembalikan status/.test(message)) return "monitor tidak mengembalikan baris";
+  if (message === "Balasan RouterOS melebihi batas baris") return "balasan melebihi batas baris. Sampel tidak lengkap";
+  if (message === "Perintah RouterOS melewati batas waktu") return "pembacaan melewati batas waktu";
   return "koneksi atau pembacaan API gagal";
 }
 
@@ -163,7 +189,7 @@ export class NocMonitor {
       if (!seen.has(key)) progress.consecutive = 0;
     }
     const changes = snapshot.readings.filter(({ key, state }) => this.#record(key, state));
-    if (changes.length) {
+    if (changes.length || snapshot.logAlerts?.length) {
       if (this.#outbox.length === 32) {
         this.#outbox.shift();
         this.#droppedNotifications++;
@@ -174,15 +200,16 @@ export class NocMonitor {
     if (!pending) return;
     const missed = this.#droppedNotifications
       ? `\n${this.#droppedNotifications} notifikasi terdahulu terlewat karena antrean penuh.` : "";
-    await this.options.notify(this.#format("NOC · Perubahan status", pending) + missed);
+    const title = pending.readings.length ? "NOC · Perubahan status" : "NOC · Kejadian log";
+    await this.options.notify(this.#format(title, pending) + missed);
     this.#outbox.shift();
     this.#droppedNotifications = 0;
-    const faults = pending.readings.filter(({ key, state }) => state !== "ok"
+    const faults = pending.readings.filter(({ key, state }) => key !== LOG_CHECK && state !== "ok"
       && snapshot.readings.some((reading) => reading.key === key && reading.state === state));
     if (signal.aborted || !faults.length || this.#analysis) return;
     if (!snapshot.readings.some(({ key, state }) => key === "API router" && state === "ok")) return;
 
-    this.#analysis = this.options.diagnose({ ...pending, readings: faults })
+    this.#analysis = this.options.diagnose({ observedAt: pending.observedAt, readings: faults })
       .then(async (analysis) => {
         const stillRelevant = faults.some(({ key, state }) =>
           this.#latest?.readings.some((reading) => reading.key === key && reading.state === state));
@@ -211,7 +238,8 @@ export class NocMonitor {
       `${title} · ${this.options.config.expectedIdentity}`,
       snapshot.observedAt,
       ...snapshot.readings.map(({ key, state, detail }) => `• ${key} [${labels[state]}] ${detail}`),
-      "Cakupan pengukuran: API, link Ethernet dan rute default IPv4. Internet dari sisi klien belum diuji.",
+      ...(snapshot.logAlerts?.map((alert) => `• [LOG] ${alert}`) ?? []),
+      `Cakupan pengukuran: API, link Ethernet dan rute default IPv4${this.options.config.logEnabled ? ", serta log memory" : ""}. Internet dari sisi klien belum diuji.`,
     ].join("\n");
   }
 }

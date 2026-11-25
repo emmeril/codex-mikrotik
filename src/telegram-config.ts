@@ -5,6 +5,8 @@ export interface NocConfig {
   routeTables: string[];
   intervalMs: number;
   consecutiveSamples: number;
+  logEnabled?: boolean;
+  wanSessionNames?: string[];
 }
 
 export interface TelegramAgentConfig {
@@ -71,6 +73,7 @@ function loadNocConfig(allowedUserIds: ReadonlySet<string>): NocConfig | undefin
   if (expectedIdentity.length > 100 || /[\x00-\x1f\x7f]/.test(expectedIdentity)) {
     throw new Error("NOC_EXPECTED_ROUTER harus berupa nama router yang valid");
   }
+  const wanSessionNames = process.env.NOC_WAN_SESSION_NAMES?.trim();
   return {
     recipient,
     expectedIdentity,
@@ -78,6 +81,8 @@ function loadNocConfig(allowedUserIds: ReadonlySet<string>): NocConfig | undefin
     routeTables: nocNames("NOC_IPV4_ROUTE_TABLES", process.env.NOC_IPV4_ROUTE_TABLES?.trim() || "main"),
     intervalMs: integerValue("NOC_INTERVAL_SECONDS", 30, 15, 600) * 1_000,
     consecutiveSamples: integerValue("NOC_CONSECUTIVE_SAMPLES", 3, 2, 10),
+    logEnabled: booleanValue("NOC_LOG_ENABLED", true),
+    ...(wanSessionNames ? { wanSessionNames: nocNames("NOC_WAN_SESSION_NAMES", wanSessionNames) } : {}),
   };
 }
 

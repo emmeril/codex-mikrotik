@@ -166,6 +166,8 @@ NOC mengambil sampel API, link Ethernet, dan rute default IPv4 dari proses Teleg
 
 Gunakan waktu sampel pada pesan untuk membedakan riwayat dari status terbaru. Notifikasi pemulihan berlaku untuk pemeriksaan tersebut. Diagnosis NOC bisa menindaklanjuti dengan pembacaan terarah, sementara perubahan melalui Telegram tetap mengikuti preview dan konfirmasi pengguna.
 
+Pemantauan log NOC hanya mengambil entri dari buffer `memory`. Sampel awal menjadi pembanding. Setelah itu, bot memilih entri baru dan merangkum kejadian yang dikenali tanpa meneruskan teks log mentah ke Telegram atau Codex. Jika buffer berganti seluruhnya, router restart, atau entri hilang sebelum diperiksa, bot melaporkan bahwa sebagian kejadian mungkin terlewat. Ringkasan log putus link atau sesi adalah bukti kejadian, bukan pengukuran durasi gangguan atau dampak klien. Lihat [manual log RouterOS](https://manual.mikrotik.com/docs/diagnostics-monitoring-and-troubleshooting/log/).
+
 ### Sebelum dan sesudah perubahan
 
 1. Verifikasi ulang target dan kondisi awal yang akan diubah. Gunakan `.id` atau nama yang sudah dicocokkan, bukan nomor urut tampilan `print` sebagai identitas tetap. Simpan nilai awal yang diperlukan untuk rollback tanpa menyalin secret.
