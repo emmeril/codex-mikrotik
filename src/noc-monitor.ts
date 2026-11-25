@@ -6,16 +6,24 @@ import { NocLogReadError, type NocLogWatcher } from "./noc-logs.js";
 import type { NocConfig } from "./telegram-config.js";
 import { withClient } from "./tools.js";
 
-interface NocReading {
+export interface NocReading {
   key: string;
   state: "ok" | "fault" | "unknown";
   detail: string;
+}
+
+export interface NocMetric {
+  key: string;
+  value: number;
+  unit: "%" | "ms" | "Mbps";
+  capacity?: boolean;
 }
 
 export interface NocSnapshot {
   observedAt: string;
   readings: NocReading[];
   logAlerts?: string[];
+  metrics?: NocMetric[];
 }
 
 const LOG_CHECK = "Log MikroTik";
@@ -28,6 +36,7 @@ export async function readNocSnapshot(
   const readings: NocReading[] = [];
   let logReading: NocReading | undefined;
   let logAlerts: string[] = [];
+  const metrics: NocMetric[] = [];
   const addRouterReading = (state: NocReading["state"], detail: string) => {
     readings.push({ key: "API router", state, detail });
   };
@@ -36,9 +45,18 @@ export async function readNocSnapshot(
       const [identity] = await client.command("/system/identity/print", { proplist: ["name"], limit: 1 });
       if (identity?.name !== noc.expectedIdentity) return null;
       const [resource] = await client.command("/system/resource/print", {
-        proplist: ["version", ...(logWatcher ? ["uptime"] : [])], limit: 1,
+        proplist: ["version", "cpu-load", "free-memory", "total-memory", ...(logWatcher ? ["uptime"] : [])], limit: 1,
       });
       const version = resource?.version?.match(/^[67]\.\d+(?:\.\d+)*/)?.[0];
+      if (version && resource) {
+        const cpu = resource["cpu-load"]?.match(/^\d+(?:\.\d+)?$/)?.[0];
+        const total = Number(resource["total-memory"] || NaN);
+        const free = Number(resource["free-memory"] || NaN);
+        if (cpu && Number(cpu) <= 100) metrics.push({ key: "CPU MikroTik", unit: "%", value: Number(cpu) });
+        if (Number.isFinite(total) && total > 0 && free >= 0 && free <= total) {
+          metrics.push({ key: "RAM MikroTik", unit: "%", value: (1 - free / total) * 100 });
+        }
+      }
       if (version && logWatcher) {
         try {
           const sample = await logWatcher.sample(client, resource?.uptime);
@@ -66,7 +84,8 @@ export async function readNocSnapshot(
     addRouterReading("unknown", readFailure(error));
   }
   if (logReading) readings.push(logReading);
-  return { observedAt: new Date().toISOString(), readings, ...(logAlerts.length ? { logAlerts } : {}) };
+  return { observedAt: new Date().toISOString(), readings, ...(logAlerts.length ? { logAlerts } : {}),
+    ...(metrics.length ? { metrics } : {}) };
 }
 
 async function readEthernet(router: RouterOsConfig, name: string): Promise<NocReading> {
@@ -160,7 +179,14 @@ export class NocMonitor {
     read: () => Promise<NocSnapshot>;
     notify: (message: string) => Promise<unknown>;
     diagnose: (snapshot: NocSnapshot) => Promise<string>;
-  }) {}
+    observe?: (snapshot: NocSnapshot, changes: NocReading[]) => Promise<void>;
+    previousStates?: ReadonlyMap<string, NocReading["state"]>;
+    incidentRef?: (key: string, observedAt: string) => string | undefined;
+  }) {
+    for (const [key, state] of options.previousStates ?? []) {
+      this.#checks.set(key, { latest: state, consecutive: 0, confirmed: state });
+    }
+  }
 
   status(): string {
     const latest = this.#latest;
@@ -196,6 +222,9 @@ export class NocMonitor {
       }
       this.#outbox.push({ ...snapshot, readings: changes });
     }
+    await this.options.observe?.(snapshot, changes).catch(() => {
+      console.error("NOC gagal menyimpan riwayat atau mengirim laporan berkala.");
+    });
     const pending = this.#outbox[0];
     if (!pending) return;
     const missed = this.#droppedNotifications
@@ -204,7 +233,7 @@ export class NocMonitor {
     await this.options.notify(this.#format(title, pending) + missed);
     this.#outbox.shift();
     this.#droppedNotifications = 0;
-    const faults = pending.readings.filter(({ key, state }) => key !== LOG_CHECK && state !== "ok"
+    const faults = pending.readings.filter(({ key, state }) => /^(Ethernet |Default IPv4 |CPU MikroTik|RAM MikroTik)/.test(key) && state !== "ok"
       && snapshot.readings.some((reading) => reading.key === key && reading.state === state));
     if (signal.aborted || !faults.length || this.#analysis) return;
     if (!snapshot.readings.some(({ key, state }) => key === "API router" && state === "ok")) return;
@@ -237,9 +266,12 @@ export class NocMonitor {
     return [
       `${title} · ${this.options.config.expectedIdentity}`,
       snapshot.observedAt,
-      ...snapshot.readings.map(({ key, state, detail }) => `• ${key} [${labels[state]}] ${detail}`),
+      ...snapshot.readings.map(({ key, state, detail }) => {
+        const ref = this.options.incidentRef?.(key, snapshot.observedAt);
+        return `• ${key} [${labels[state]}]${ref ? ` ${ref}` : ""} ${detail}`;
+      }),
       ...(snapshot.logAlerts?.map((alert) => `• [LOG] ${alert}`) ?? []),
-      `Cakupan pengukuran: API, link Ethernet dan rute default IPv4${this.options.config.logEnabled ? ", serta log memory" : ""}. Internet dari sisi klien belum diuji.`,
+      "Hasil ini berlaku untuk sumber dan titik pengamatan yang tertera. Perangkat atau layanan tanpa pengukuran belum terverifikasi.",
     ].join("\n");
   }
 }

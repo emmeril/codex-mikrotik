@@ -6,6 +6,9 @@ import { loadTelegramAgentConfig } from "./telegram-config.js";
 import { loadConfig } from "./config.js";
 import { NocMonitor, readNocSnapshot } from "./noc-monitor.js";
 import { NocLogWatcher } from "./noc-logs.js";
+import { loadNocInventory } from "./noc-inventory.js";
+import { measureNoc } from "./noc-measurements.js";
+import { NocOperations, reportHour } from "./noc-operations.js";
 import { splitTelegramText } from "./telegram-api.js";
 
 async function main(): Promise<void> {
@@ -35,26 +38,46 @@ async function main(): Promise<void> {
   });
   const api = createTelegramApi(config.botToken);
   const nocConfig = config.noc;
+  const inventory = nocConfig ? loadNocInventory(process.env.NOC_INVENTORY_FILE?.trim(), {
+    host: routerConfig.host, identity: nocConfig.expectedIdentity,
+  }) : undefined;
+  const stateFile = process.env.NOC_STATE_FILE?.trim();
+  const dailyHour = nocConfig ? reportHour(process.env.NOC_REPORT_HOUR_WIB) : undefined;
+  const notifyNoc = async (message: string) => {
+    if (!nocConfig) return;
+    for (const chunk of splitTelegramText(message)) await api.sendMessage(nocConfig.recipient, chunk);
+  };
+  const operations = nocConfig && inventory ? new NocOperations({
+    routerIdentity: nocConfig.expectedIdentity, inventory, notify: notifyNoc,
+    ...(stateFile ? { file: stateFile } : {}),
+    ...(dailyHour === undefined ? {} : { dailyHour }),
+  }) : undefined;
   const logWatcher = nocConfig?.logEnabled ? new NocLogWatcher({
     interfaces: nocConfig.interfaces,
+    ...(inventory ? { firewallLogPrefixes: inventory.firewallLogPrefixes } : {}),
     ...(nocConfig.wanSessionNames ? { wanSessionNames: nocConfig.wanSessionNames } : {}),
     maxRows: routerConfig.maxRows,
   }) : undefined;
-  const noc = nocConfig && new NocMonitor({
+  const noc = nocConfig && inventory && operations ? new NocMonitor({
     config: nocConfig,
-    read: () => readNocSnapshot(routerConfig, nocConfig, logWatcher),
-    notify: async (message) => {
-      for (const chunk of splitTelegramText(message)) await api.sendMessage(nocConfig.recipient, chunk);
-    },
+    read: async () => measureNoc(await readNocSnapshot(routerConfig, nocConfig, logWatcher), routerConfig, nocConfig, inventory),
+    notify: notifyNoc,
     diagnose: (snapshot) => agent.diagnoseNocIncident(nocConfig.expectedIdentity, snapshot),
-  });
+    observe: (snapshot, changes) => operations.observe(snapshot, changes),
+    previousStates: operations.activeStates(),
+    incidentRef: (key, observedAt) => operations.incidentRef(key, observedAt),
+  }) : undefined;
   const bot = new TelegramBot({
     api,
     agent,
     allowedUserIds: config.allowedUserIds,
     privateOnly: config.privateOnly,
     pollTimeoutSeconds: config.pollTimeoutSeconds,
-    ...(nocConfig && noc ? { noc: { recipient: nocConfig.recipient, status: () => noc.status() } } : {}),
+    ...(nocConfig && noc && operations ? { noc: {
+      recipient: nocConfig.recipient, status: () => noc.status(),
+      command: (command, argument) => operations.command(command, argument),
+      recordChange: (completed, ok) => operations.recordChange(completed, ok),
+    } } : {}),
   });
 
   const controller = new AbortController();
@@ -66,6 +89,7 @@ async function main(): Promise<void> {
     await Promise.all([bot.run(controller.signal), noc?.run(controller.signal)]);
   } finally {
     controller.abort();
+    await operations?.flush().catch(() => console.error("NOC gagal menyimpan riwayat terakhir."));
     await runner.close?.();
   }
 }

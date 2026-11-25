@@ -168,6 +168,33 @@ Gunakan waktu sampel pada pesan untuk membedakan riwayat dari status terbaru. No
 
 Pemantauan log NOC hanya mengambil entri dari buffer `memory`. Sampel awal menjadi pembanding. Setelah itu, bot memilih entri baru dan merangkum kejadian yang dikenali tanpa meneruskan teks log mentah ke Telegram atau Codex. Jika buffer berganti seluruhnya, router restart, atau entri hilang sebelum diperiksa, bot melaporkan bahwa sebagian kejadian mungkin terlewat. Ringkasan log putus link atau sesi adalah bukti kejadian, bukan pengukuran durasi gangguan atau dampak klien. Lihat [manual log RouterOS](https://manual.mikrotik.com/docs/diagnostics-monitoring-and-troubleshooting/log/).
 
+### Operasi NOC
+
+Semua perintah operasi hanya tersedia di chat pribadi penerima NOC. Bot tetap memerlukan konfirmasi pengguna untuk perubahan RouterOS.
+
+| Tugas | Alur yang tersedia |
+| --- | --- |
+| Monitoring jaringan | `/noc` menampilkan sampel router dan probe endpoint terdaftar. `/noc_inventory` menampilkan perangkat dan relasi parent yang dicatat operator. |
+| Insiden dan troubleshooting | Perubahan yang melewati ambang membuka atau memperbarui insiden. `/noc_incidents` menunjukkan ID, kondisi, waktu, dan pemulihan. `/noc_ack NOC-1` mencatat pengakuan operator. Diagnosis RouterOS dan keputusan perubahan memakai bukti baru serta alur persetujuan. |
+| Bandwidth dan kapasitas | RX/TX interface dihitung dari sudut router. Queue yang terdaftar dilaporkan sebagai upload/download dari sudut target. Laporan menandai arah dengan tiga atau lebih sampel mencapai 80% kapasitas yang dicatat. |
+| Performa | CPU/RAM dari RouterOS. Untuk ICMP endpoint terdaftar, bot mencatat loss, RTT rata-rata dan deviasi RTT sebagai ukuran variasi. Untuk TCP, bot mencatat waktu koneksi ke satu port. |
+| Keamanan | Bot merangkum lonjakan gagal login RouterOS dan, jika didaftarkan, 20 atau lebih entri per prefix log firewall dalam lima menit. Operator memeriksa sumber, cakupan dan pola sebelum menyimpulkan ada serangan atau akses ilegal. |
+| Pemeliharaan, backup dan pemulihan | Ambang CPU/RAM dan umur cadangan memberi peringatan dini. Pemeriksaan backup mengamati keberadaan, ukuran dan waktu file tanpa membaca isi. Buat backup melalui proses arsip resmi dan uji restore pada perangkat atau lingkungan yang ditetapkan operator. |
+| Eskalasi dan pelanggan | `/noc_escalate NOC-1` dan `/noc_customer NOC-1` menyiapkan draf di chat operator. Verifikasi dampak dan penerima sebelum meneruskan draf ke teknisi, ISP, atau pelanggan. |
+| Dokumentasi dan laporan | Relasi perangkat berasal dari inventaris operator. NOC menyimpan insiden, ringkasan log, hasil operasi perubahan yang disetujui, dan ringkasan metrik 14 hari. `/noc_report` menampilkan hari ini dan `/noc_report 7` menampilkan tujuh hari kalender WIB sampai hari ini. |
+
+**Menambahkan perangkat.** Buat salinan pribadi [contoh inventaris](noc-inventory.example.json), ganti seluruh alamat contoh dengan alamat yang memang boleh dipantau, hapus perangkat yang belum tersedia, dan atur `NOC_INVENTORY_FILE`. Host NOC memerlukan `ping` dari iputils di Linux untuk probe ICMP. Setiap sampel mengirim lima paket ICMP ke satu IP yang didaftarkan atau membuka satu koneksi TCP ke port yang ditulis operator. TCP hanya mengukur keterjangkauan port. Probe dari host NOC tidak membuktikan ISP tertentu digunakan. Untuk pemantauan per ISP, siapkan titik pengamatan dengan rute dan jalur balik yang diverifikasi terlebih dahulu. Telemetri vendor seperti optical power, pelanggan PON, atau kualitas radio memerlukan integrasi sumber data perangkat.
+
+Jika `MIKROTIK_HOST` berupa alamat IP, target manajemen tersebut dipantau dengan ICMP sebagai `router-utama`. Atur `probeMainRouter: false` di inventaris jika target tidak menerima ICMP. Target dengan hostname perlu didaftarkan memakai IP yang telah diverifikasi.
+
+Masukkan kapasitas langganan per arah pada `links` hanya setelah memeriksa data paket ISP. NOC tetap mengukur RX/TX tanpa angka itu, dengan utilisasi yang belum diketahui. Pada `queues`, masukkan nama Simple Queue persis dan label segmen yang boleh muncul di Telegram. Trafik yang melewati FastTrack dapat tidak dihitung oleh Simple Queue. Statistik ini tidak menjalankan uji throughput internet. Lihat [manual Simple Queue](https://manual.mikrotik.com/docs/firewall-and-quality-of-service/queues/simple-queue/).
+
+Untuk pemeriksaan backup, daftarkan file arsip yang sudah dihasilkan sistem backup pada `backups`, beserta batas umur. Umur dan ukuran file adalah petunjuk, sedangkan integritas dan kemampuan restore perlu diuji terpisah. Untuk log firewall, `firewallLogPrefixes` hanya berisi prefix persis yang sudah dipakai oleh aturan logging yang disetujui. Registrasi inventaris tidak membuat aturan firewall.
+
+Riwayat disimpan di `.noc/state.json` secara default. `NOC_STATE_FILE` dapat menunjuk penyimpanan persisten lain yang hanya dapat diakses operator. Simpan file tersebut bersama arsip operasional jika perlu memulihkan riwayat NOC. Bot segera menyimpan perubahan insiden dan akuan. Ringkasan metrik disimpan berkala paling lambat setelah sekitar lima menit pemantauan berjalan, atau saat penghentian proses normal. Bot memakai kembali status insiden saat restart. Laporan harian merangkum hari sebelumnya bila ada sampel dan dikirim sekali sehari setelah jam `NOC_REPORT_HOUR_WIB` (default 08.00 WIB, gunakan `off` untuk menonaktifkan). Waktu pengiriman mengikuti sampel pertama yang selesai setelah jam tersebut.
+
+Saat tindak lanjut memerlukan perubahan, catat bukti awal dan dampak yang diketahui, pastikan cadangan yang relevan dapat dipakai, lalu siapkan langkah verifikasi serta rollback. Setelah persetujuan, jalankan perubahan sesuai preview dan amati kembali pemeriksaan yang gagal. Status pulih pada satu indikator hanya menutup insiden indikator tersebut.
+
 ### Sebelum dan sesudah perubahan
 
 1. Verifikasi ulang target dan kondisi awal yang akan diubah. Gunakan `.id` atau nama yang sudah dicocokkan, bukan nomor urut tampilan `print` sebagai identitas tetap. Simpan nilai awal yang diperlukan untuk rollback tanpa menyalin secret.

@@ -1,0 +1,47 @@
+{
+  "assets": [
+    {
+      "id": "olt-a",
+      "label": "OLT area A",
+      "kind": "olt",
+      "probe": { "kind": "icmp", "address": "192.0.2.10", "maxLossPct": 20, "maxRttMs": 30 }
+    },
+    {
+      "id": "ont-a",
+      "label": "ONT area A",
+      "kind": "ont",
+      "parent": "olt-a",
+      "probe": { "kind": "icmp", "address": "192.0.2.11" }
+    },
+    {
+      "id": "ap-a",
+      "label": "AP area A",
+      "kind": "ap",
+      "parent": "ont-a",
+      "probe": { "kind": "icmp", "address": "192.0.2.12" }
+    },
+    {
+      "id": "server-a",
+      "label": "Server layanan A",
+      "kind": "server",
+      "probe": { "kind": "tcp", "address": "192.0.2.20", "port": 443 }
+    },
+    {
+      "id": "isp-test",
+      "label": "Endpoint cek ISP",
+      "kind": "isp",
+      "probe": { "kind": "icmp", "address": "192.0.2.30" }
+    }
+  ],
+  "links": [
+    { "interface": "ISP-1", "rxMbps": 100, "txMbps": 100 }
+  ],
+  "queues": [
+    { "name": "queue-area-a", "label": "Segmen area A" }
+  ],
+  "backups": [
+    { "id": "router", "label": "Arsip konfigurasi router", "path": "/path/ke/backup/router.backup", "maxAgeHours": 48 }
+  ],
+  "cpuAlertPct": 85,
+  "ramAlertPct": 85
+}

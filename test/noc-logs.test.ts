@@ -86,3 +86,13 @@ test("log watcher reports continuity loss and handles reused IDs after a router 
   log.capacity = "101";
   await assert.rejects(watcher.sample(log, "1m"), /Kapasitas buffer/);
 });
+
+test("firewall burst alerts count only registered prefixes and omit packet details", async () => {
+  const log = new MemoryLog();
+  const watcher = new NocLogWatcher({ interfaces: ["ISP-1"], maxRows: 100, firewallLogPrefixes: ["NOC-DROP"] });
+  await watcher.sample(log, "1d");
+  log.rows = Array.from({ length: 20 }, (_, i) => row(i + 1, "firewall,info", "NOC-DROP: private payload"));
+  log.rows.push(row(21, "firewall,info", "NOC-DROP-OTHER: unrelated"));
+  const { alerts } = await watcher.sample(log, "1d1m");
+  assert.deepEqual(alerts, ["20 entri firewall dengan prefix NOC-DROP baru terbaca dalam 5 menit"]);
+});

@@ -211,9 +211,13 @@ test("automatic NOC diagnosis rejects changes even when Telegram writes are enab
 test("NOC status only appears in the configured recipient's private chat", async () => {
   const api = new FakeTelegramApi();
   const agent = new FakeAgent();
+  const operations: string[] = [];
   const bot = new TelegramBot({
     api, agent, allowedUserIds: new Set(["42", "43"]), privateOnly: false,
-    pollTimeoutSeconds: 1, noc: { recipient: 42, status: () => "Sampel NOC" },
+    pollTimeoutSeconds: 1, noc: {
+      recipient: 42, status: () => "Sampel NOC",
+      command: async (command, argument) => { operations.push(`${command} ${argument}`); return "Draf operator"; },
+    },
   });
   await bot.handleUpdate({ update_id: 1, message: message(-10, 42, "group", "/noc") });
   await bot.handleUpdate({ update_id: 2, message: message(43, 43, "private", "/noc") });
@@ -221,6 +225,13 @@ test("NOC status only appears in the configured recipient's private chat", async
   assert.match(api.sent[0]!.text, /tidak tersedia/);
   assert.match(api.sent[1]!.text, /tidak tersedia/);
   assert.equal(api.sent[2]!.text, "Sampel NOC");
+  await bot.handleUpdate({ update_id: 4, message: message(-10, 42, "group", "/noc_customer NOC-1") });
+  await bot.handleUpdate({ update_id: 5, message: message(43, 43, "private", "/noc_ack NOC-1") });
+  await bot.handleUpdate({ update_id: 6, message: message(42, 42, "private", "/noc_customer NOC-1") });
+  assert.match(api.sent[3]!.text, /tidak tersedia/);
+  assert.match(api.sent[4]!.text, /tidak tersedia/);
+  assert.equal(api.sent[5]!.text, "Draf operator");
+  assert.deepEqual(operations, ["/noc_customer NOC-1"]);
   assert.equal(agent.replyCalls, 0);
 });
 

@@ -29,6 +29,23 @@ Perintah:
 /whoami - tampilkan Telegram user ID
 /help - bantuan`;
 
+const NOC_COMMANDS = {
+  "/noc": "pembacaan terakhir",
+  "/noc_inventory": "daftar perangkat dan topologi",
+  "/noc_incidents": "insiden terbuka dan pemulihan",
+  "/noc_ack": "akui insiden (contoh /noc_ack NOC-1)",
+  "/noc_report": "laporan hari ini atau /noc_report 7",
+  "/noc_escalate": "draf eskalasi (sertakan ID insiden)",
+  "/noc_customer": "draf pemberitahuan pelanggan (sertakan ID insiden)",
+} as const;
+
+interface TelegramNoc {
+  recipient: number;
+  status: () => string;
+  command?: (command: string, argument: string) => Promise<string | undefined>;
+  recordChange?: (completed: number, ok: boolean) => Promise<void>;
+}
+
 interface TelegramBotApi {
   deleteWebhook(): Promise<void>;
   getUpdates(offset: number, timeout: number): Promise<TelegramUpdate[]>;
@@ -50,7 +67,7 @@ export class TelegramBot {
   readonly #privateOnly: boolean;
   readonly #pollTimeoutSeconds: number;
   readonly #typingRefreshMs: number;
-  readonly #noc: { recipient: number; status: () => string } | undefined;
+  readonly #noc: TelegramNoc | undefined;
   readonly #queues = new Map<string, Promise<void>>();
 
   constructor(options: {
@@ -60,7 +77,7 @@ export class TelegramBot {
     privateOnly: boolean;
     pollTimeoutSeconds: number;
     typingRefreshMs?: number;
-    noc?: { recipient: number; status: () => string };
+    noc?: TelegramNoc;
   }) {
     this.#api = options.api;
     this.#agent = options.agent;
@@ -123,13 +140,24 @@ export class TelegramBot {
 
     const command = commandName(text);
     if (command === "/start" || command === "/help") {
-      const nocHelp = this.#canViewNoc(message) ? "\n/noc - tampilkan pembacaan terakhir NOC" : "";
+      const nocHelp = this.#canViewNoc(message)
+        ? Object.entries(NOC_COMMANDS).filter(([name]) => name === "/noc" || this.#noc?.command)
+          .map(([name, purpose]) => `\n${name} - ${purpose}`).join("")
+        : "";
       await this.#sendText(message.chat.id, helpText + nocHelp);
       return;
     }
-    if (command === "/noc") {
-      const status = this.#canViewNoc(message) ? this.#noc?.status() : undefined;
-      await this.#sendText(message.chat.id, status ?? "Status NOC tidak tersedia di chat ini.");
+    if (command && Object.hasOwn(NOC_COMMANDS, command)) {
+      let response: string | undefined;
+      if (this.#canViewNoc(message)) {
+        const argument = text.replace(/^\S+\s*/, "");
+        try {
+          response = command === "/noc" ? this.#noc?.status() : await this.#noc?.command?.(command, argument);
+        } catch {
+          response = "Operasi NOC gagal. Periksa penyimpanan dan log bot.";
+        }
+      }
+      await this.#sendText(message.chat.id, response ?? "Status NOC tidak tersedia di chat ini.");
       return;
     }
     if (command === "/new") {
@@ -201,6 +229,8 @@ export class TelegramBot {
     await this.#api.answerCallbackQuery(query.id, "Menjalankan perubahan...");
     await this.#api.clearInlineKeyboard(message.chat.id, message.message_id).catch(() => undefined);
     const result = await this.#agent.confirm(message.chat.id, userId, id);
+    if (result.plan) await this.#noc?.recordChange?.(result.completed, result.ok)
+      .catch(() => console.error("NOC gagal mencatat hasil perubahan router."));
     await this.#sendText(message.chat.id, formatExecutionResult(result));
   }
 

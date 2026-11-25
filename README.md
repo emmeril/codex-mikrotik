@@ -222,6 +222,8 @@ Saat NOC aktif, bot juga memeriksa buffer log `memory` MikroTik setiap sampel. E
 
 Jika nama sesi PPP/PPPoE berbeda dari port fisik, atur `NOC_WAN_SESSION_NAMES` dengan daftar nama persis yang terlihat di log. Set `NOC_LOG_ENABLED=false` jika pemantauan log perlu dimatikan. Bot membaca maksimal 2.000 entri dan mengikuti batas `MIKROTIK_MAX_ROWS` jika lebih rendah. Buffer yang lebih besar atau berhenti menerima log saat penuh dilaporkan sebagai belum terukur. Entri yang sudah keluar dari buffer di antara dua pembacaan mungkin terlewat.
 
+NOC juga mencatat insiden dan pemulihan, mengukur CPU/RAM dan trafik router, serta mengirim laporan harian ke penerima NOC. Gunakan [panduan operasi NOC](docs/network-engineering.md#operasi-noc), termasuk untuk mendaftarkan OLT, ONT, access point, server, endpoint ISP, queue dan cadangan.
+
 ## Mengaktifkan perubahan konfigurasi
 
 Ubah `.env` lalu mulai ulang sesi Codex:

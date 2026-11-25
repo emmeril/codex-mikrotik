@@ -3,6 +3,7 @@ import type { RouterOsClient, RouterOsRecord } from "./client.js";
 const LOG_CAP = 2_000;
 const ALERT_WINDOW_MS = 5 * 60_000;
 const LOGIN_THRESHOLD = 5;
+const FIREWALL_THRESHOLD = 20;
 const MEMORY_FILTER = "?buffer=memory";
 const TOPIC_LIST = /^[a-z0-9-]+(?:,[a-z0-9-]+){0,15}$/;
 
@@ -18,22 +19,25 @@ type LogReader = Pick<RouterOsClient, "command">;
 export class NocLogWatcher {
   #seen: Map<string, string> | undefined;
   #uptimeSeconds: number | undefined;
-  #loginSamples: { at: number; count: number }[] = [];
+  readonly #signalSamples = new Map<string, { at: number; count: number }[]>();
   readonly #pending = new Map<string, number>();
   readonly #sentAt = new Map<string, number>();
   readonly #interfaces: readonly string[];
   readonly #wanSessions: readonly string[];
   readonly #maxRows: number;
+  readonly #firewallPrefixes: readonly string[];
   readonly #now: () => number;
 
   constructor(options: {
     interfaces: readonly string[];
     wanSessionNames?: readonly string[];
+    firewallLogPrefixes?: readonly string[];
     maxRows: number;
     now?: () => number;
   }) {
     this.#interfaces = options.interfaces;
     this.#wanSessions = options.wanSessionNames ?? options.interfaces;
+    this.#firewallPrefixes = options.firewallLogPrefixes ?? [];
     this.#maxRows = Math.min(options.maxRows, LOG_CAP);
     this.#now = options.now ?? Date.now;
   }
@@ -77,14 +81,14 @@ export class NocLogWatcher {
     const restarted = uptimeSeconds !== undefined && this.#uptimeSeconds !== undefined
       && uptimeSeconds < this.#uptimeSeconds;
     const newEntries = [...seen].filter(([id, topics]) => restarted || previous.get(id) !== topics);
-    const candidates = newEntries.filter(([, topics]) => watchedTopics(topics));
+    const candidates = newEntries.filter(([, topics]) => watchedTopics(topics, this.#firewallPrefixes.length > 0));
     const topics = [...new Set(candidates.map(([, value]) => value))];
     const details = topics.length ? await client.command("/log/print", {
       ...options, queries: topicQueries(topics.slice(0, 16)), proplist: [".id", "topics", "message"],
     }) : [];
     const byId = new Map(details.map((row) => [row[".id"], row]));
     let gap = restarted || (previous.size > 0 && newEntries.length === seen.size);
-    let loginFailures = 0;
+    const signals = new Map<string, number>();
     let rebootLog = false;
 
     for (const [id, expectedTopics] of candidates) {
@@ -94,7 +98,7 @@ export class NocLogWatcher {
         continue;
       }
       const event = this.#classify(row);
-      if (event === "login") loginFailures++;
+      if (event === "login" || event?.startsWith("firewall:")) signals.set(event, (signals.get(event) ?? 0) + 1);
       else if (event === "reboot") rebootLog = true;
       else if (event) this.#add(event);
     }
@@ -104,7 +108,7 @@ export class NocLogWatcher {
     if (gap) this.#add("Cakupan log terputus. Sebagian kejadian mungkin tidak terbaca");
     if (restarted || rebootLog) this.#add(rebootLog
       ? "Log sistem mencatat router reboot" : "Uptime router turun sejak pembacaan sebelumnya");
-    const alerts = this.#summarize(loginFailures);
+    const alerts = this.#summarize(signals);
     return {
       detail: `${newEntries.length} entri baru terbaca dari buffer memory.${gap ? " Riwayat antar pembacaan tidak utuh." : ""}`,
       alerts,
@@ -117,6 +121,11 @@ export class NocLogWatcher {
     if (topics.includes("system")) {
       if (/^login failure for user\b/i.test(message)) return "login";
       if (/^router rebooted\b/i.test(message)) return "reboot";
+    }
+    if (topics.includes("firewall")) {
+      const match = this.#firewallPrefixes.find((prefix) => message.startsWith(prefix)
+        && /^(?:$|[\s:])/.test(message.slice(prefix.length)));
+      if (match) return `firewall:${match}`;
     }
     if (topics.includes("interface")) {
       const name = this.#interfaces.find((port) => message.startsWith(`${port} link down`)
@@ -140,10 +149,8 @@ export class NocLogWatcher {
     this.#pending.set(label, (this.#pending.get(label) ?? 0) + 1);
   }
 
-  #summarize(loginFailures: number): string[] {
+  #summarize(signals: ReadonlyMap<string, number>): string[] {
     const now = this.#now();
-    if (loginFailures) this.#loginSamples.push({ at: now, count: loginFailures });
-    this.#loginSamples = this.#loginSamples.filter(({ at }) => now - at <= ALERT_WINDOW_MS);
     const alerts: string[] = [];
     for (const [label, count] of this.#pending) {
       if (now - (this.#sentAt.get(label) ?? -Infinity) < ALERT_WINDOW_MS) continue;
@@ -152,24 +159,34 @@ export class NocLogWatcher {
       alerts.push(count === 1 ? label : `${label} (${count} kejadian)`);
     }
 
-    const total = this.#loginSamples.reduce((sum, sample) => sum + sample.count, 0);
-    if (total >= LOGIN_THRESHOLD && now - (this.#sentAt.get("login") ?? -Infinity) >= ALERT_WINDOW_MS) {
-      alerts.push(`${total} kegagalan login router baru terbaca dalam 5 menit`);
-      this.#loginSamples = [];
-      this.#sentAt.set("login", now);
+    for (const [key, count] of signals) {
+      this.#signalSamples.set(key, [...(this.#signalSamples.get(key) ?? []), { at: now, count }]);
+    }
+    for (const [key, history] of this.#signalSamples) {
+      const samples = history.filter(({ at }) => now - at <= ALERT_WINDOW_MS);
+      const total = samples.reduce((sum, sample) => sum + sample.count, 0);
+      if (total >= (key === "login" ? LOGIN_THRESHOLD : FIREWALL_THRESHOLD)
+        && now - (this.#sentAt.get(key) ?? -Infinity) >= ALERT_WINDOW_MS) {
+        alerts.push(key === "login" ? `${total} kegagalan login router baru terbaca dalam 5 menit`
+          : `${total} entri firewall dengan prefix ${key.slice("firewall:".length)} baru terbaca dalam 5 menit`);
+        this.#signalSamples.delete(key);
+        this.#sentAt.set(key, now);
+      } else if (samples.length) this.#signalSamples.set(key, samples);
+      else this.#signalSamples.delete(key);
     }
     return alerts;
   }
 }
 
-function watchedTopics(value: string): boolean {
+function watchedTopics(value: string, watchFirewall: boolean): boolean {
   if (value.length > 200 || !TOPIC_LIST.test(value)) return false;
   const topics = value.split(",");
   if (topics.includes("debug") || topics.includes("packet")) return false;
   if (topics.includes("system")) {
     return !topics.includes("account") || ["warning", "error", "critical"].some((severity) => topics.includes(severity));
   }
-  return ["interface", "dhcp", "pppoe", "ppp"].some((topic) => topics.includes(topic));
+  return (watchFirewall && topics.includes("firewall"))
+    || ["interface", "dhcp", "pppoe", "ppp"].some((topic) => topics.includes(topic));
 }
 
 function topicQueries(topics: string[]): string[] {
